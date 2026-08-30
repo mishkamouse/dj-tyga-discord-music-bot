@@ -14,7 +14,8 @@ Parameters:
     Type: String
     Description: >
       ARN of the Secrets Manager secret holding DISCORD_TOKEN, DISCORD_CLIENT_ID,
-      ANTHROPIC_API_KEY, and GITHUB_TOKEN (see infra/README.md for the exact JSON shape).
+      ANTHROPIC_API_KEY, GITHUB_TOKEN, and an optional YTDLP_COOKIES (see infra/README.md
+      for the exact JSON shape).
       Created once by hand, out-of-band; never a resource in this template, so its
       plaintext never lands in a CloudFormation template or parameter history.
   GitHubOrgRepo:
@@ -283,6 +284,10 @@ Resources:
 
             chmod +x infra/rotate-warp.sh
             echo "0 */6 * * * root $REPO_DIR/infra/rotate-warp.sh >> /var/log/dj-tyga-warp-rotate.log 2>&1" > /etc/cron.d/dj-tyga-warp-rotate
+
+            chmod +x infra/pull-cookies.sh
+            infra/pull-cookies.sh "$SECRET_ARN" "$REGION"
+            echo "0 */6 * * * root $REPO_DIR/infra/pull-cookies.sh $SECRET_ARN $REGION >> /var/log/dj-tyga-cookies-pull.log 2>&1" > /etc/cron.d/dj-tyga-pull-cookies
 
             docker compose -f docker-compose.yml -f infra/docker-compose.prod.yml up -d
 

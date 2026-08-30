@@ -23,7 +23,8 @@ aws secretsmanager create-secret --name dj-tyga --secret-string '{
   "DISCORD_GUILD_ID": "",
   "ANTHROPIC_API_KEY": "...",
   "ANTHROPIC_WORKSPACE_ID": "",
-  "GITHUB_TOKEN": "..."
+  "GITHUB_TOKEN": "...",
+  "YTDLP_COOKIES": ""
 }'
 ```
 
@@ -32,6 +33,11 @@ GitHub PAT scoped to just this repo is the better fit than a classic token. Note
 returned secret ARN; `infra/main.yaml`'s `SecretArn` parameter needs it. This secret is
 deliberately not a CloudFormation resource, so its plaintext never lands in a template or
 CloudFormation's parameter history.
+
+`YTDLP_COOKIES` is optional, for age-restricted videos (see the root README's
+Troubleshooting section for how to export it). Leave it blank; the instance already
+refreshes it automatically (see "Updating cookies for age-restricted videos" below) once
+you set it.
 
 ## 2. Bootstrap OIDC and deploy roles (`infra/oidc.yaml`), once, by hand
 
@@ -127,6 +133,22 @@ to `infra/docker-compose.prod.yml`.
 - **Infra** (`infra/main.yaml`, `infra/userdata.sh`; paste `userdata.sh`'s content into
   `main.yaml`'s LaunchTemplate after editing it, see the comment in both files): Actions
   tab > "Deploy infra" > Run workflow. Manual, not automatic.
+
+## Updating cookies for age-restricted videos
+
+Optional; only needed if you want `/play` to work on age-restricted content. Export a
+fresh `cookies.txt` (see the root README's Troubleshooting section), then update the
+secret's `YTDLP_COOKIES` field with its contents, either through the Secrets Manager
+console or:
+
+```bash
+NEW_SECRET=$(aws secretsmanager get-secret-value --secret-id dj-tyga --query SecretString --output text \
+  | jq --rawfile cookies cookies.txt '.YTDLP_COOKIES = $cookies')
+aws secretsmanager put-secret-value --secret-id dj-tyga --secret-string "$NEW_SECRET"
+```
+
+A cron job on the instance picks up the change within 6 hours on its own; no redeploy or
+restart needed. Cookies expire in a few days, so this repeats on that cadence.
 
 ## Ad-hoc debugging
 

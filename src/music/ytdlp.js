@@ -1,5 +1,7 @@
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const execFileAsync = promisify(execFile);
 
@@ -13,22 +15,31 @@ const PLAYER_CLIENTS = process.env.YTDLP_PLAYER_CLIENTS || '';
 // Routes yt-dlp's requests through the warp sidecar (Cloudflare's network) for
 // reliability on cloud hosts. Leave blank for local dev, where this isn't needed.
 const PROXY_URL = process.env.YTDLP_PROXY_URL || '';
+// Optional: a Netscape-format cookies.txt for age-restricted videos, which need a real
+// signed-in session, not just a PO token. Checked fresh on every call rather than once,
+// so dropping a cookies file in later doesn't need a restart. Absent by default; this bot
+// works with zero account of any kind unless this is explicitly set up.
+const COOKIES_PATH = process.env.YTDLP_COOKIES_FILE || path.join(__dirname, '../../data/cookies.txt');
 
-const BASE_ARGS = [
-  '--no-warnings',
-  // YouTube extraction requires solving a JS challenge; use the Node.js this bot already
-  // runs on instead of pulling in Deno (yt-dlp's default runtime) as a separate dependency.
-  '--js-runtimes', 'node',
-  // Tokens come from the bgutil-ytdlp-pot-provider sidecar automatically. See "How it
-  // works" in the README.
-  '--extractor-args', `youtubepot-bgutilhttp:base_url=${POT_PROVIDER_URL}`,
-  ...(PLAYER_CLIENTS ? ['--extractor-args', `youtube:player_client=${PLAYER_CLIENTS}`] : []),
-  ...(PROXY_URL ? ['--proxy', PROXY_URL] : []),
-];
+function getBaseArgs() {
+  return [
+    '--no-warnings',
+    // YouTube extraction requires solving a JS challenge; use the Node.js this bot
+    // already runs on instead of pulling in Deno (yt-dlp's default runtime) as a
+    // separate dependency.
+    '--js-runtimes', 'node',
+    // Tokens come from the bgutil-ytdlp-pot-provider sidecar automatically. See "How it
+    // works" in the README.
+    '--extractor-args', `youtubepot-bgutilhttp:base_url=${POT_PROVIDER_URL}`,
+    ...(PLAYER_CLIENTS ? ['--extractor-args', `youtube:player_client=${PLAYER_CLIENTS}`] : []),
+    ...(PROXY_URL ? ['--proxy', PROXY_URL] : []),
+    ...(fs.existsSync(COOKIES_PATH) ? ['--cookies', COOKIES_PATH] : []),
+  ];
+}
 
 async function runYtDlp(args) {
   try {
-    const { stdout } = await execFileAsync(YTDLP_PATH, [...BASE_ARGS, ...args], {
+    const { stdout } = await execFileAsync(YTDLP_PATH, [...getBaseArgs(), ...args], {
       maxBuffer: 1024 * 1024 * 32,
     });
     return stdout;

@@ -234,6 +234,7 @@ All variables live in `.env` (copy from `.env.example`).
 | `YTDLP_PLAYER_CLIENTS` | Leave blank; let yt-dlp choose Innertube clients itself. |
 | `YTDLP_PROXY_URL` | Optional network proxy for yt-dlp. Compose sets this automatically; leave blank for local dev. |
 | `AUDIO_PROXY_URL` | Optional proxy for the audio download step. Compose sets this automatically; leave blank for local dev. |
+| `YTDLP_COOKIES_FILE` | Optional path to a cookies.txt, for age-restricted videos. Default `data/cookies.txt`; unset by default, needs no account. |
 | `QUEUE_IDLE_TIMEOUT_MS` | How long an empty queue waits before the bot leaves voice. Default 5 minutes. |
 | `ALONE_TIMEOUT_MS` | In 24/7 mode, how long the bot tolerates an empty channel before giving up. Default 1 hour. |
 | `RADIO_STORE_PATH` | Where the `/radio` artist rotation is stored. Default `data/radio-artists.json`. |
@@ -288,6 +289,16 @@ deploys via SSM. Templates, boot script, and the full runbook live in
 - **"Identity-linked" Anthropic API keys need a workspace ID.** If `/ask` or `/radio` fail
   with an error mentioning `anthropic-workspace-id`, generate a key scoped to one
   workspace, or set `ANTHROPIC_WORKSPACE_ID`.
+- **Age-restricted videos fail with "Sign in to confirm you're not a bot," even though
+  everything else plays fine.** That content needs a real signed-in session, which a PO
+  token doesn't provide. Drop a Netscape-format `cookies.txt` at `data/cookies.txt` (or
+  point `YTDLP_COOKIES_FILE` elsewhere) to enable it; leave it unset to skip those tracks.
+  Use a dedicated account for this, not a personal one: export with the
+  [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-clean/ahmnmhfbokciafffnknlekllgcnafnie)
+  extension from a private window right after logging in, and don't log out afterward or
+  the exported session dies with it. Cookies expire in a few days, so this needs
+  refreshing periodically; see [Deploying to AWS](infra/README.md) for how the AWS setup
+  automates picking up a refreshed cookie file.
 
 ## Project layout
 

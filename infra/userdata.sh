@@ -105,4 +105,8 @@ set -x
 chmod +x infra/rotate-warp.sh
 echo "0 */6 * * * root $REPO_DIR/infra/rotate-warp.sh >> /var/log/dj-tyga-warp-rotate.log 2>&1" > /etc/cron.d/dj-tyga-warp-rotate
 
+chmod +x infra/pull-cookies.sh
+infra/pull-cookies.sh "$SECRET_ARN" "$REGION"
+echo "0 */6 * * * root $REPO_DIR/infra/pull-cookies.sh $SECRET_ARN $REGION >> /var/log/dj-tyga-cookies-pull.log 2>&1" > /etc/cron.d/dj-tyga-pull-cookies
+
 docker compose -f docker-compose.yml -f infra/docker-compose.prod.yml up -d
