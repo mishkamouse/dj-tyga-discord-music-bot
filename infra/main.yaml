@@ -227,6 +227,11 @@ Resources:
               -o /usr/libexec/docker/cli-plugins/docker-compose
             chmod +x /usr/libexec/docker/cli-plugins/docker-compose
 
+            BUILDX_VERSION=$(curl -fsSL https://api.github.com/repos/docker/buildx/releases/latest | grep -m1 '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')
+            curl -fsSL "https://github.com/docker/buildx/releases/download/v$BUILDX_VERSION/buildx-v$BUILDX_VERSION.linux-arm64" \
+              -o /usr/libexec/docker/cli-plugins/docker-buildx
+            chmod +x /usr/libexec/docker/cli-plugins/docker-buildx
+
             SECRET_JSON=$(aws secretsmanager get-secret-value --region "$REGION" --secret-id "$SECRET_ARN" --query SecretString --output text)
             GITHUB_TOKEN=$(echo "$SECRET_JSON" | jq -r .GITHUB_TOKEN)
 

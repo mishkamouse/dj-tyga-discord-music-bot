@@ -30,6 +30,15 @@ curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-co
   -o /usr/libexec/docker/cli-plugins/docker-compose
 chmod +x /usr/libexec/docker/cli-plugins/docker-compose
 
+# Not a dnf package on AL2023 — `docker compose build` needs BuildKit via this plugin
+# (0.17.0+), the base `docker` package alone doesn't include it. Hardcoded "arm64" (not
+# `uname -m`'s "aarch64", unlike docker-compose above) — buildx's release assets use Go's
+# arch naming, docker-compose's use the kernel's; this template is arm64-only (t4g) anyway.
+BUILDX_VERSION=$(curl -fsSL https://api.github.com/repos/docker/buildx/releases/latest | grep -m1 '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')
+curl -fsSL "https://github.com/docker/buildx/releases/download/v$BUILDX_VERSION/buildx-v$BUILDX_VERSION.linux-arm64" \
+  -o /usr/libexec/docker/cli-plugins/docker-buildx
+chmod +x /usr/libexec/docker/cli-plugins/docker-buildx
+
 # One secret holds everything sensitive this app needs (see infra/README.md for its exact
 # shape): GITHUB_TOKEN (this boot script's own clone credential, not passed to any
 # container) plus the app's real secrets (DISCORD_TOKEN, ANTHROPIC_API_KEY, ...).
