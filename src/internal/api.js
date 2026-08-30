@@ -116,11 +116,22 @@ async function handle(req, res) {
       const capped = tracks.slice(0, MAX_ADD_TRACKS);
       const valid = capped.filter((t) => t && t.title && YOUTUBE_URL_RE.test(t.url || ''));
       if (valid.length === 0) return json(res, 400, { error: 'no valid tracks (need a youtube.com/youtu.be url + title)' });
+
+      // position="now" needs the "was something already playing" check to happen before
+      // enqueue() — if the queue was already idle, enqueue() auto-starts the first new
+      // track itself, and skipping afterward would skip straight past it.
+      const wasPlaying = Boolean(queue.current);
       queue.enqueue(
         valid.map((t) => ({ title: t.title, url: t.url, duration: t.duration ?? null, requestedBy })),
-        { atFront: position === 'next' },
+        { atFront: position === 'next' || position === 'now' },
       );
-      return json(res, 200, { added: valid.length, cappedFrom: tracks.length > MAX_ADD_TRACKS ? tracks.length : undefined });
+      if (position === 'now' && wasPlaying) queue.skip();
+
+      return json(res, 200, {
+        added: valid.length,
+        cappedFrom: tracks.length > MAX_ADD_TRACKS ? tracks.length : undefined,
+        startedNow: position === 'now',
+      });
     }
 
     if (req.method === 'POST' && rest === 'queue/remove') {

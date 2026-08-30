@@ -67,21 +67,31 @@ def make_tools(guild_id: str, bot_api_url: str):
         """Add one or more tracks to the queue. Use results from search_youtube — never
         invent a url. To replace the whole queue, call clear_queue first, then this.
 
+        Important: clear_queue only empties what's queued *behind* the currently playing
+        track — it does not stop that track. If the user wants playback to actually
+        switch to the new tracks right away (e.g. "play X", "clear the queue and play X",
+        "switch to X now"), use position="now", not just clear_queue + the default
+        position — otherwise the new tracks just sit behind whatever's still playing.
+
         Args:
             tracks: Tracks to enqueue, each with "url", "title", and optionally "duration".
-            position: "end" (default) to add after everything currently queued, or "next"
-                to insert them right after the currently playing track, ahead of
-                everything else already queued.
+            position: "end" (default) to add after everything currently queued, "next" to
+                play right after the current track finishes, or "now" to skip whatever's
+                currently playing and start these immediately.
 
         Returns:
-            A short confirmation of how many tracks were added.
+            A short confirmation of how many tracks were added, and whether playback
+            actually switched to them now — trust this over your own assumption.
         """
         resp = client.post(
             "/queue/add",
             json={"tracks": tracks, "requestedBy": "assistant", "position": position},
         )
         resp.raise_for_status()
-        return f"Added {resp.json()['added']} track(s)."
+        data = resp.json()
+        if data.get("startedNow"):
+            return f"Added {data['added']} track(s) — playback switched to them now."
+        return f"Added {data['added']} track(s)."
 
     @tool
     def remove_tracks(indices: list[int]) -> str:
