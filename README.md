@@ -8,7 +8,8 @@ you in plain English.
 ```
 /play Kanye West Ultralight Beam
 /ask queue up 10 popular kanye songs from 2016
-/radio 90s R&B
+/radio add Kendrick Lamar
+/radio on
 ```
 
 ## Contents
@@ -44,11 +45,15 @@ you in plain English.
   [AWS Strands Agents](https://strandsagents.com)) interprets free-form requests
   ("queue up some upbeat 2016 songs", "remove everything", "move the last song to play
   next") and carries them out using the same queue every slash command uses
-- `/radio [topic]` — starts an instant, continuously-shuffled rotation around a topic
-  (an artist, genre, mood, era — or nothing, for a sensible default). This is
-  deliberately **not** LLM-driven: it's a single fast YouTube search returning a large
-  pool of results, because the goal is music playing in your ears in ~2 seconds, not a
-  hand-curated playlist five round trips later
+- `/radio` — a continuous rotation built from a small, **saved-per-server list of
+  artists** (`/radio add`/`remove`/`list`), not a one-shot topic search. Starting it
+  (`/radio on`) is deliberately **not** LLM-driven — a fast bulk YouTube search per artist
+  gets music playing in a couple of seconds, not a hand-curated playlist several round
+  trips later. The list itself persists across restarts, and editing it — via the slash
+  command or by asking `/ask` in plain English — reshapes the *live* queue immediately if
+  radio is already on, without cutting off whatever's currently playing. Radio never locks
+  the queue, either: `/play`-ing something outside the rotation doesn't turn radio off — it
+  just cuts that song into the mix once, and the artist rotation keeps going underneath it
 - Both are fully optional — every plain slash command works with zero LLM involvement,
   and the assistant is scoped to a fixed, audited set of queue-only tools (see
   [Security](#security-the-natural-language-assistants-boundaries))
@@ -61,7 +66,7 @@ you in plain English.
 | `/pause` | Pause the current track. |
 | `/resume` | Resume a paused track. |
 | `/skip` | Skip the current track. |
-| `/stop` | Stop playback, clear the queue, and leave the voice channel. |
+| `/stop` | Stop playback and clear the queue. Leaves the voice channel too — unless 24/7 mode is on, in which case it stays connected (see below). |
 | `/leave` | Leave the voice channel. |
 | `/queue` | Show the queue — now playing plus upcoming, paginated with buttons. |
 | `/nowplaying` | Show the current track as a live control-panel card (buttons included). |
@@ -70,7 +75,10 @@ you in plain English.
 | `/loop <off\|track\|queue>` | Set the loop mode. |
 | `/247` | Toggle 24/7 mode — stay connected indefinitely instead of leaving on an empty queue (see below). |
 | `/ask <query>` | Tell the bot what you want in plain language; the assistant figures out the tool calls. *(optional — needs an LLM provider configured)* |
-| `/radio [query]` | Start a continuous shuffled rotation. No query = a configurable default topic. *(optional — needs an LLM provider configured, though it makes no LLM calls itself)* |
+| `/radio on [artist]` | Start radio from your saved artist rotation (optionally adding one first). |
+| `/radio off` | Turn off radio mode; finishes what's queued, then stops normally. |
+| `/radio add <artist>` / `/radio remove <artist>` | Edit the rotation — reshapes the live queue immediately if radio is on. |
+| `/radio list` | Show the current rotation. |
 
 The "Now Playing" card's buttons cover pause/resume, skip, stop, shuffle, and loop —
 everything the most common single-click actions need — while `/ask` covers anything
@@ -79,9 +87,20 @@ front."
 
 `/247` replaces the normal empty-queue idle timeout with a much longer one based on
 whether anyone else is actually in the channel — the bot stays connected through an empty
-queue indefinitely, and only leaves if a human manually stops it or the channel has had no
-other members for over an hour (`ALONE_TIMEOUT_MS`). Running `/247` again turns it off and
-restores the normal timeout immediately.
+queue indefinitely, and only leaves once a human actually disconnects it (`/leave`, or
+`/247` again to turn it off) or the channel has had no other members for over an hour
+(`ALONE_TIMEOUT_MS`). `/stop` while 24/7 is on deliberately does **not** count as that
+manual disconnect — it just stops playback and clears the queue, the same as it always
+does, and the bot stays put; only `/leave` (or toggling `/247` off) actually ends the
+session.
+
+`/radio`'s artist list is per-server and survives restarts (stored under `data/`, not
+in-memory queue state) — build it up over time with `/radio add`/`remove` regardless of
+whether radio is currently playing. `/radio` doesn't touch the LLM at all: it's plain
+YouTube search, one call per artist, so it starts fast. `/ask` *can* edit the same list in
+plain English ("add some Kendrick to the radio") using three narrow tools scoped to that
+one list — it still has no way to start radio itself or touch voice, same as every other
+LLM boundary in this project (see [Security](#security-the-natural-language-assistants-boundaries)).
 
 ## How it works
 
@@ -89,12 +108,12 @@ restores the normal timeout immediately.
 flowchart TD
     Discord((Discord)) <-->|gateway websocket + voice UDP| Bot
 
-    Bot["<b>bot</b> — Node.js / discord.js<br/>the only service that talks to Discord;<br/>owns the queue, voice connection, and UI"]
-    Bot -->|"/ask, /radio queries"| Agent
+    Bot["<b>bot</b> — Node.js / discord.js<br/>the only service that talks to Discord;<br/>owns the queue, voice connection, UI, and radio artist list"]
+    Bot -->|"/ask queries"| Agent
     Agent -->|"tool calls, via internal API"| Bot
     Bot -->|PO token requests| Pot
 
-    Agent["<b>strands-agent</b> — Python / FastAPI<br/>Strands Agents SDK · powers /ask and /radio"]
+    Agent["<b>strands-agent</b> — Python / FastAPI<br/>Strands Agents SDK · powers /ask<br/>(and can edit the radio list, but never starts radio or touches voice)"]
     Agent -->|model calls| LLM[("Anthropic API<br/>or Bedrock / Ollama")]
 
     Pot["<b>pot-provider</b><br/>runs BotGuard attestation itself,<br/>serves fresh YouTube anti-bot tokens"]
@@ -111,6 +130,29 @@ Opus inside a WebM container, so it's demuxed directly with no transcoding step 
 `ffmpeg` path only kicks in as a fallback for the rare format that isn't already Opus.
 The *next* queued track's stream is resolved one track ahead in the background, so
 skipping and track transitions feel instant instead of pausing to resolve a URL.
+
+**Why free-text search prefers songs over videos:** typing an artist, character, or game
+into plain YouTube search often surfaces the most-viewed video for that term — a full
+boss-fight recording, a let's-play, a reaction video — rather than the actual song, since
+regular search ranks by popularity across *all* video content, not music specifically. Every
+search in this bot (`/play`, `/radio`, `/ask`'s search tools) instead queries **YouTube
+Music's own catalog** first — `music.youtube.com`'s "Songs" section, then its "Videos"
+(official music videos) section, falling back to a regular YouTube search only if neither
+has anything. This isn't post-hoc filtering of regular results: YouTube Music's index
+structurally only contains music, so non-music video never has a chance to surface in the
+first place. See `searchYoutube` in `src/music/resolve.js`.
+
+One trade-off: YouTube Music's search listing doesn't carry a track's duration up front the
+way a regular YouTube search does. `/play` backfills it immediately with one extra
+extraction of the chosen result — the same cost it always paid, just moved a step later —
+so its "Added to queue" card still shows a real duration right away. Bulk results (radio's
+per-artist pool, the `/ask` agent's search tools) skip that extra round trip to stay fast,
+so those show "Live/Unknown" until a track is actually about to play: `getStreamInfo`
+already does a full per-track extraction right before playback (and one ahead, via
+prefetch) to get a playable stream, and backfills duration onto the track at that point for
+free. In practice this means the currently-playing track and the very next one in queue
+always show accurate durations; anything further back in a freshly-started radio rotation
+shows "Live/Unknown" until its turn comes up.
 
 **Why YouTube extraction needs help at all:** YouTube requires solving a JS challenge and
 increasingly gates access behind a "Proof-of-Origin" token, especially from datacenter
@@ -129,11 +171,14 @@ for the full failure signature.
 **Why `/ask` and `/radio` are architected differently:** `/ask` needs genuine reasoning
 (picking specific real songs, deciding what "high energy" means, chaining several tool
 calls) — that's the LLM's job, worth the latency. `/radio` needs to start playing music
-in about two seconds — a single bulk YouTube search does that, and going through an LLM
-agent for it was tried first and was simply too slow (many sequential search/tool round
-trips to hand-curate 25+ songs). Both still just call the exact same `GuildQueue` the
-slash commands use, so there's one single source of truth for what's actually playing no
-matter which interface touched it.
+in about two seconds — a bulk YouTube search per rotation artist does that, and going
+through an LLM agent for it was tried first and was simply too slow (many sequential
+search/tool round trips to hand-curate 25+ songs). The one place they meet is the radio
+*artist list* itself: it's just per-guild state (`src/music/radioStore.js`), small enough
+that the agent can safely mutate it through three narrow tools without needing to reason
+about playback at all. Both interfaces still call the exact same `GuildQueue` the slash
+commands use, so there's one single source of truth for what's actually playing no matter
+which interface touched it.
 
 ## Getting started
 
@@ -196,8 +241,8 @@ Start the bot:
 npm start
 ```
 
-To also run `/ask` and `/radio` locally without Docker, start the agent sidecar in
-another terminal:
+To also run `/ask` locally without Docker (`/radio` doesn't need it — see above), start
+the agent sidecar in another terminal:
 
 ```bash
 cd agent
@@ -218,6 +263,7 @@ All variables live in `.env` (copy from `.env.example`). Grouped by what they af
 | `YTDLP_PLAYER_CLIENTS` | Leave blank — let yt-dlp choose Innertube clients itself. See [Troubleshooting](#troubleshooting--operational-notes). |
 | `QUEUE_IDLE_TIMEOUT_MS` | How long an empty queue waits before the bot leaves voice. Default 5 minutes. |
 | `ALONE_TIMEOUT_MS` | In 24/7 mode (`/247`), how long the bot tolerates an empty channel before giving up anyway. Default 1 hour. |
+| `RADIO_STORE_PATH` | Where the `/radio` artist rotation is persisted. Default `data/radio-artists.json`; Docker Compose mounts `./data` as a volume so this survives rebuilds. |
 | `STRANDS_AGENT_URL` | Base URL for the agent sidecar. **Leave blank to disable `/ask` and `/radio` entirely.** |
 | `INTERNAL_API_PORT` | Port the bot's internal queue API listens on (never published to the host). |
 | `STRANDS_MODEL_PROVIDER` | `anthropic` (default), `bedrock`, or `ollama` — see `agent/model.py`. |
@@ -235,13 +281,18 @@ is scoped per-guild, and the guild ID is fixed from the original Discord interac
 never something the model can set itself, so even a successful prompt injection can't
 redirect a tool call at another server.
 
-The agent has exactly eleven tools — search, batch search, and queue
-read/add/remove/move/clear/shuffle/skip/pause/resume/loop — and nothing else. No shell,
-file, or generic HTTP/network tool is installed (`agent/requirements.txt` deliberately
-omits `strands-agents-tools`, the package that would add those), and the agent is never
-given `load_tools_from_directory=True`, so nothing beyond that fixed list is ever
-reachable. It also has no way to join or leave a voice channel — that stays
-human-triggered (`/play`, `/stop`, `/leave`).
+The agent has exactly fourteen tools — search, batch search, queue
+read/add/remove/move/clear/shuffle/skip/pause/resume/loop, and radio artist-list
+add/remove/list — and nothing else. No shell, file, or generic HTTP/network tool is
+installed (`agent/requirements.txt` deliberately omits `strands-agents-tools`, the package
+that would add those), and the agent is never given `load_tools_from_directory=True`, so
+nothing beyond that fixed list is ever reachable. It also has no way to join or leave a
+voice channel, or to start/stop radio mode itself — those stay human-triggered
+(`/play`, `/stop`, `/leave`, `/radio on`, `/radio off`). The radio artist-list tools are
+pure per-guild data mutation (add/remove/list a string) with no playback or voice
+side-effects of their own — the only place they can influence what's actually
+*playing* is through the exact same reconciliation path `/radio add`/`remove` already use
+server-side, not anything the tool call does directly.
 
 **`add_tracks`'s `url` is validated, not just trusted.** The tool's docstring tells the
 model to only use URLs from `search_youtube`, but a docstring is a suggestion, not a
@@ -265,9 +316,13 @@ timeout, or a real external disconnect).
 ## Deploying to AWS
 
 This is a persistent-connection workload (Discord gateway websocket + voice UDP), which
-rules out Lambda/Fargate-style short-lived compute. The simplest fit is a small always-on
-host — an EC2 or Lightsail instance running `docker compose up -d`. No inbound networking
-is needed at all; every container only makes outbound connections.
+rules out Lambda/Fargate-style short-lived compute. It runs on a single self-healing EC2
+instance (an Auto Scaling Group pinned at 1) with zero inbound networking — every
+container only makes outbound connections, so there's nothing to expose. Fully
+CloudFormation-managed, with GitHub Actions handling routine deploys via SSM (no SSH, no
+stored AWS keys). All of it — templates, boot script, and the full runbook — lives in
+[`infra/`](infra/README.md), kept separate from the app so local dev never has to think
+about AWS at all.
 
 ## Troubleshooting & operational notes
 
@@ -314,15 +369,21 @@ is needed at all; every container only makes outbound connections.
 - **`src/commands/`** — one file per slash command
 - **`src/music/`**
   - `GuildQueue.js` — per-guild queue/player state machine, the single source of truth
-  - `resolve.js` — yt-dlp wrapper: search, URL/playlist resolution, stream resolution
+  - `resolve.js` — yt-dlp wrapper: search (song-first via YouTube Music), URL/playlist resolution, stream resolution
   - `audioResource.js` — builds a Discord audio resource (WebM/Opus fast path + ffmpeg fallback)
   - `ytdlp.js` — low-level yt-dlp subprocess wrapper, PO-token wiring
   - `queueManager.js` — guildId → `GuildQueue` registry
+  - `radioStore.js` — persisted per-guild `/radio` artist list (`data/radio-artists.json`)
+  - `radioManager.js` — builds/reconciles the radio queue from that artist list
 - **`src/discord/`**
   - `embeds.js`, `components.js`, `format.js` — rich embed/button UI builders
   - `buttonHandler.js` — routes "Now Playing" card button clicks back into `GuildQueue`
 - **`src/internal/`**
   - `api.js` — internal HTTP API the agent's tools call (never exposed externally)
   - `agentClient.js` — bot-side client for the strands-agent sidecar
-- **`agent/`** — Python/FastAPI Strands Agents sidecar (powers `/ask` and `/radio`):
-  `app.py`, `model.py`, `tools.py`, `interventions.py`
+- **`agent/`** — Python/FastAPI Strands Agents sidecar (powers `/ask`, and the radio
+  artist-list tools `/ask` can use): `app.py`, `model.py`, `tools.py`, `interventions.py`
+- **`infra/`** — CloudFormation templates, boot script, and deployment runbook for the AWS
+  EC2 deployment (see [Deploying to AWS](#deploying-to-aws)); `.github/workflows/` holds
+  the two GitHub Actions that deploy to it (a platform requirement — Actions only run from
+  that exact path, so those two files can't live under `infra/` too)

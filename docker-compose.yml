@@ -6,6 +6,10 @@ services:
       # Talk to sidecars over the compose network instead of localhost.
       YTDLP_POT_PROVIDER_URL: http://pot-provider:4416
       STRANDS_AGENT_URL: http://strands-agent:8000
+    volumes:
+      # Persists the /radio artist rotation (data/radio-artists.json) across restarts and
+      # redeploys, not just container restarts.
+      - ./data:/app/data
     depends_on:
       - pot-provider
       - strands-agent

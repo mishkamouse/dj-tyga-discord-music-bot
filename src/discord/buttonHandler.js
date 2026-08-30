@@ -18,7 +18,8 @@ async function handleButtonInteraction(interaction) {
   }
 
   if (action === 'stop') {
-    queue.stop();
+    if (queue.persistent) queue.clearPlayback();
+    else queue.stop();
     return interaction.update({ embeds: [nowPlayingEmbed(queue)], components: [] });
   }
 

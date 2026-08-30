@@ -26,6 +26,7 @@ function nowPlayingEmbed(queue) {
     .addFields(
       { name: 'Requested by', value: track.requestedBy || 'Unknown', inline: true },
       { name: 'Loop', value: LOOP_LABEL[queue.loopMode] ?? 'Off', inline: true },
+      ...(queue.radioMode ? [{ name: 'Radio', value: 'On', inline: true }] : []),
       ...(queue.persistent ? [{ name: '24/7', value: 'On', inline: true }] : []),
       { name: 'Up next', value: queue.tracks[0] ? queue.tracks[0].title : '*Queue is empty*', inline: false },
     );
@@ -90,12 +91,22 @@ function playlistAddedEmbed(tracks, title) {
     .setDescription(`Added **${tracks.length}** tracks to the queue.`);
 }
 
-function radioStartedEmbed(topic, count) {
+function radioStartedEmbed(artists, count) {
   return new EmbedBuilder()
     .setColor(COLOR.added)
     .setAuthor({ name: '📻 Radio started' })
-    .setTitle(truncate(topic, 256))
-    .setDescription(`${count} songs queued and shuffled on continuous loop.`);
+    .setTitle(truncate(artists.length === 1 ? artists[0] : `${artists.length} artists`, 256))
+    .setDescription(
+      `${count} songs queued and shuffled on continuous loop.\n**Rotation:** ${artists.join(', ')}`,
+    );
+}
+
+function radioArtistsEmbed(artists) {
+  const embed = new EmbedBuilder().setColor(COLOR.queue).setAuthor({ name: '📻 Radio rotation' });
+  embed.setDescription(
+    artists.length === 0 ? 'No artists yet — add one with `/radio add`.' : artists.map((a) => `• ${a}`).join('\n'),
+  );
+  return embed;
 }
 
 function assistantReplyEmbed(text, { title } = {}) {
@@ -111,5 +122,6 @@ module.exports = {
   trackAddedEmbed,
   playlistAddedEmbed,
   radioStartedEmbed,
+  radioArtistsEmbed,
   assistantReplyEmbed,
 };

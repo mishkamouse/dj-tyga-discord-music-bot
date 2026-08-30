@@ -21,7 +21,9 @@ def make_tools(guild_id: str, bot_api_url: str):
             max_results: How many candidates to return (max 10).
 
         Returns:
-            A list of candidates, each with title, url, duration (seconds), and channel.
+            A list of candidates, each with title, url, duration (seconds, often null —
+            search results are song-first and don't always carry duration up front), and
+            channel.
         """
         resp = client.post("/search", json={"query": query, "maxResults": max_results})
         resp.raise_for_status()
@@ -192,6 +194,51 @@ def make_tools(guild_id: str, bot_api_url: str):
         return "Resumed."
 
     @tool
+    def add_radio_artist(name: str) -> str:
+        """Add an artist to this server's saved radio rotation. Takes effect immediately
+        if radio mode is currently on — the live queue gets topped up with their songs
+        without interrupting what's playing. If radio mode is off, this just saves the
+        artist for the next time someone runs /radio on. This does not start radio itself
+        or touch voice — you have no tool for that; tell the user to run /radio on.
+
+        Args:
+            name: Artist name, e.g. "Kanye West".
+
+        Returns:
+            A short confirmation.
+        """
+        resp = client.post("/radio/artists", json={"artist": name})
+        resp.raise_for_status()
+        return f"Added {name!r} to the radio rotation."
+
+    @tool
+    def remove_radio_artist(name: str) -> str:
+        """Remove an artist from this server's saved radio rotation. Takes effect
+        immediately if radio mode is currently on — their not-yet-played songs are pulled
+        from the live queue (whatever's currently playing finishes normally).
+
+        Args:
+            name: Artist name to remove, matched case-insensitively.
+
+        Returns:
+            A short confirmation.
+        """
+        resp = client.post("/radio/artists/remove", json={"artist": name})
+        resp.raise_for_status()
+        return f"Removed {name!r} from the radio rotation."
+
+    @tool
+    def list_radio_artists() -> list[str]:
+        """List the artists currently in this server's saved radio rotation.
+
+        Returns:
+            The artist names, in the order they were added.
+        """
+        resp = client.get("/radio/artists")
+        resp.raise_for_status()
+        return resp.json()["artists"]
+
+    @tool
     def set_loop_mode(mode: str) -> str:
         """Set the loop mode for the queue.
 
@@ -219,5 +266,8 @@ def make_tools(guild_id: str, bot_api_url: str):
         pause_playback,
         resume_playback,
         set_loop_mode,
+        add_radio_artist,
+        remove_radio_artist,
+        list_radio_artists,
     ]
     return tools, client

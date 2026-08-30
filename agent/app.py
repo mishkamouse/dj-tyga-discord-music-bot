@@ -38,8 +38,13 @@ SYSTEM_PROMPT = (
     "your own knowledge first, then look them up — use search_youtube for a handful of "
     "songs, but search_youtube_batch whenever you're finding more than ~5 at once (it "
     "does them all in one round trip instead of one at a time), then add them with as "
-    "few add_tracks calls as possible. Keep replies short and conversational, "
-    "summarizing what you did."
+    "few add_tracks calls as possible. You can also manage this server's saved radio "
+    "artist rotation (add_radio_artist, remove_radio_artist, list_radio_artists) — these "
+    "persist across sessions and, if radio mode is currently on, take effect immediately "
+    "in the live queue. You have no tool to start or stop radio mode itself, or to join/ "
+    "leave voice — that's /radio on and /radio off; if asked to start radio, update the "
+    "artist list if needed and tell the user to run /radio on. Keep replies short and "
+    "conversational, summarizing what you did."
 )
 
 # guild_id -> {"agent": Agent, "client": httpx.Client}. A session lives exactly as long as

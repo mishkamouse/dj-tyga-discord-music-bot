@@ -2,6 +2,9 @@ const http = require('node:http');
 const { AudioPlayerStatus } = require('@discordjs/voice');
 const { getQueue } = require('../music/queueManager');
 const { searchYoutube } = require('../music/resolve');
+const { mapWithConcurrency } = require('../music/concurrency');
+const radioStore = require('../music/radioStore');
+const { reconcile } = require('../music/radioManager');
 
 // Internal-only API for the Strands agent sidecar's tools. Never exposed outside the
 // compose network (no published port) — this is the sole surface the LLM can act through,
@@ -11,20 +14,6 @@ const PORT = Number(process.env.INTERNAL_API_PORT) || 8100;
 const MAX_ADD_TRACKS = 25;
 const MAX_SEARCH_BATCH = 30;
 const BATCH_SEARCH_CONCURRENCY = 4; // each search spawns a yt-dlp subprocess; don't flood it
-
-// Runs fn(item) over items with at most `limit` in flight at once.
-async function mapWithConcurrency(items, limit, fn) {
-  const results = new Array(items.length);
-  let next = 0;
-  async function worker() {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i]);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
 
 // The actual trust boundary for what the agent can get played: /queue/add is the only
 // path from agent-controlled text to a URL that later gets handed to yt-dlp as a
@@ -191,6 +180,26 @@ async function handle(req, res) {
       }
       queue.setLoop(mode);
       return json(res, 200, { ok: true });
+    }
+
+    if (req.method === 'GET' && rest === 'radio/artists') {
+      return json(res, 200, { artists: radioStore.getArtists(guildId) });
+    }
+
+    if (req.method === 'POST' && rest === 'radio/artists') {
+      const { artist } = await readJsonBody(req);
+      if (!artist || typeof artist !== 'string') return json(res, 400, { error: 'artist is required' });
+      const artists = radioStore.addArtist(guildId, artist);
+      if (queue.radioMode) await reconcile(queue, guildId);
+      return json(res, 200, { artists });
+    }
+
+    if (req.method === 'POST' && rest === 'radio/artists/remove') {
+      const { artist } = await readJsonBody(req);
+      if (!artist || typeof artist !== 'string') return json(res, 400, { error: 'artist is required' });
+      const artists = radioStore.removeArtist(guildId, artist);
+      if (queue.radioMode) await reconcile(queue, guildId);
+      return json(res, 200, { artists });
     }
 
     res.writeHead(404).end();

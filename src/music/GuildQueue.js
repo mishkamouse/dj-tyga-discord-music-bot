@@ -11,6 +11,7 @@ const { buildResource } = require('./audioResource');
 const { resetSession } = require('../internal/agentClient');
 const { nowPlayingEmbed } = require('../discord/embeds');
 const { nowPlayingButtons, disabledRow } = require('../discord/components');
+const radioStore = require('./radioStore');
 
 const IDLE_TIMEOUT_MS = Number(process.env.QUEUE_IDLE_TIMEOUT_MS) || 5 * 60 * 1000;
 const ALONE_TIMEOUT_MS = Number(process.env.ALONE_TIMEOUT_MS) || 60 * 60 * 1000;
@@ -43,6 +44,11 @@ class GuildQueue {
     // no other members for a while — see checkAlone().
     this.persistent = false;
     this.aloneTimer = null;
+
+    // Radio mode (/radio): loopMode is set to 'queue' as an implementation detail, and
+    // tracks pulled in for radio carry a `.artist` tag (see radioManager.js) so this queue
+    // can tell them apart from anything a user queues manually — see enqueue() below.
+    this.radioMode = false;
 
     this.player.on(AudioPlayerStatus.Idle, () => this.onTrackEnd());
     this.player.on('error', (error) => {
@@ -79,6 +85,7 @@ class GuildQueue {
       this.killActiveProcess();
       this.clearAloneTimer();
       this.persistent = false;
+      this.radioMode = false;
       if (this.current) {
         this.tracks.unshift(this.current);
         this.current = null;
@@ -87,8 +94,13 @@ class GuildQueue {
     }
   }
 
+  // Radio never locks the queue, but it also doesn't get knocked out by a manual /play
+  // (or the agent's add_tracks) anymore — a manually-added track just cuts into the
+  // rotation once (see the loop-recycle guard in playNext(): untagged tracks aren't
+  // recycled, so it plays through and the artist rotation carries on underneath it).
   enqueue(tracks, { atFront = false } = {}) {
     this.clearIdleTimer();
+
     if (atFront) this.tracks.unshift(...tracks);
     else this.tracks.push(...tracks);
     if (!this.current) {
@@ -101,7 +113,21 @@ class GuildQueue {
   async playNext() {
     if (this.current) {
       if (this.loopMode === 'track') this.tracks.unshift(this.current);
-      else if (this.loopMode === 'queue') this.tracks.push(this.current);
+      else if (this.loopMode === 'queue') {
+        if (this.radioMode) {
+          // Only radio-sourced tracks are part of the permanent rotation — a manually
+          // added track (no .artist tag) plays once and doesn't loop back in, and a
+          // radio-sourced one only recycles while its artist is still in the rotation
+          // (otherwise it'd keep resurfacing forever even after reconcile() stripped the
+          // other queued copies at removal time).
+          const stillWanted =
+            this.current.artist &&
+            radioStore.getArtists(this.guildId).some((a) => a.toLowerCase() === this.current.artist.toLowerCase());
+          if (stillWanted) this.tracks.push(this.current);
+        } else {
+          this.tracks.push(this.current);
+        }
+      }
     }
 
     const next = this.tracks.shift();
@@ -122,6 +148,7 @@ class GuildQueue {
           ? await this.nextStreamInfo.promise
           : await getStreamInfo(next);
       this.nextStreamInfo = null;
+      if (streamInfo.duration != null) next.duration = streamInfo.duration;
 
       const { resource, process: childProcess } = await buildResource(streamInfo);
       this.activeChildProcess = childProcess;
@@ -143,10 +170,17 @@ class GuildQueue {
     if (!upcoming || this.nextStreamInfo?.track === upcoming) return;
     this.nextStreamInfo = {
       track: upcoming,
-      promise: getStreamInfo(upcoming).catch((err) => {
-        console.error(`[guild ${this.guildId}] prefetch failed for "${upcoming.title}":`, err.message);
-        throw err;
-      }),
+      promise: getStreamInfo(upcoming)
+        .then((info) => {
+          // Backfill onto the queued track itself (not just used at playback time) so a
+          // /queue view checked after the prefetch resolves shows its real duration too.
+          if (info.duration != null) upcoming.duration = info.duration;
+          return info;
+        })
+        .catch((err) => {
+          console.error(`[guild ${this.guildId}] prefetch failed for "${upcoming.title}":`, err.message);
+          throw err;
+        }),
     };
   }
 
@@ -216,20 +250,34 @@ class GuildQueue {
     }
   }
 
-  stop() {
+  // Stops playback and empties the queue without necessarily disconnecting — the shared
+  // core of stop() below, and also what /stop uses on its own in 24/7 mode, where clearing
+  // the current queue shouldn't count as the "manually disconnected" override 24/7 promises
+  // to honor (see stop()). startIdleTimer() at the end is a no-op while persistent.
+  clearPlayback() {
     this.tracks = [];
     this.loopMode = 'off';
+    this.radioMode = false;
     this.current = null;
     this.nextStreamInfo = null;
     this.killActiveProcess();
     this.player.stop(true);
+    this.retireNowPlayingCard();
+    this.startIdleTimer();
+  }
+
+  // Fully ends the session: stops playback, clears the queue, and disconnects from voice —
+  // also turning off 24/7 mode, since actually leaving the channel *is* the manual
+  // disconnect 24/7 mode is waiting for. Used by /leave, /stop outside 24/7 mode, and the
+  // alone-timer giving up after too long with no one else in the channel.
+  stop() {
+    this.clearPlayback();
     this.connection?.destroy();
     this.connection = null;
     this.clearIdleTimer();
     this.clearAloneTimer();
     this.persistent = false;
     resetSession(this.guildId);
-    this.retireNowPlayingCard();
   }
 
   // Empties the upcoming queue only — leaves the current track and voice connection alone.
