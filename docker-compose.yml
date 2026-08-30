@@ -12,7 +12,7 @@ services:
     restart: unless-stopped
 
   # Generates YouTube PO tokens automatically (BotGuard attestation) so yt-dlp extraction
-  # works from this box without any manual cookie export. See the design doc.
+  # works from this box without any manual cookie export. See "How it works" in the README.
   pot-provider:
     image: brainicism/bgutil-ytdlp-pot-provider:latest
     restart: unless-stopped

@@ -105,7 +105,6 @@ function assistantReplyEmbed(text, { title } = {}) {
 }
 
 module.exports = {
-  QUEUE_PAGE_SIZE,
   nowPlayingEmbed,
   queueEmbed,
   trackAddedEmbed,

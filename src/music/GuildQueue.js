@@ -21,7 +21,7 @@ class GuildQueue {
     this.current = null;
     this.loopMode = 'off'; // off | track | queue
     this.connection = null;
-    this.textChannel = null; // last channel a command was run in, for failure notices
+    this.textChannel = null; // channel for auto-posted now-playing cards and failure notices
     this.player = createAudioPlayer({
       behaviors: { noSubscriber: NoSubscriberBehavior.Pause },
     });
@@ -30,9 +30,8 @@ class GuildQueue {
     this.nextStreamInfo = null; // { track, promise } prefetched one track ahead
     this.idleTimer = null;
 
-    // Elapsed-time bookkeeping for the now-playing progress bar — approximate (to the
-    // second) is plenty for a UI display, so no need to reconcile with the actual audio
-    // player's internal playback clock.
+    // Elapsed-time bookkeeping for the now-playing progress bar — accurate to the
+    // second, which is all a UI display needs.
     this.currentStartedAt = null;
     this.pausedAt = null;
     this.pausedMsTotal = 0;
@@ -102,12 +101,7 @@ class GuildQueue {
     if (!next) {
       this.current = null;
       this.startIdleTimer();
-      if (this.lastNowPlayingMessage) {
-        this.lastNowPlayingMessage
-          .edit({ components: [disabledRow(this.lastNowPlayingMessage.components[0])] })
-          .catch(() => {});
-        this.lastNowPlayingMessage = null;
-      }
+      this.retireNowPlayingCard();
       return;
     }
 
@@ -184,18 +178,12 @@ class GuildQueue {
     return Math.max(0, Math.floor((Date.now() - this.currentStartedAt - this.pausedMsTotal - currentPauseMs) / 1000));
   }
 
-  // Posts a fresh Now Playing card to the last known text channel and disables the
-  // buttons on the previous one (best-effort — an old message might be gone, or we might
-  // lack permission by now; none of that should ever break playback).
+  // Posts a fresh Now Playing card to the last known text channel and retires the
+  // previous one. Best-effort throughout — an old message might be gone, or we might
+  // lack permission by now; none of that should ever break playback.
   async postNowPlaying() {
     if (!this.textChannel || !this.current) return;
-    const previous = this.lastNowPlayingMessage;
-    this.lastNowPlayingMessage = null;
-    if (previous) {
-      previous
-        .edit({ components: [disabledRow(previous.components[0])] })
-        .catch(() => {});
-    }
+    this.retireNowPlayingCard();
     try {
       const message = await this.textChannel.send({
         embeds: [nowPlayingEmbed(this)],
@@ -207,12 +195,14 @@ class GuildQueue {
     }
   }
 
-  // Used by /nowplaying so its reply becomes the one live-controlled card too, instead of
-  // leaving stale buttons active on whatever the auto-posted card was.
-  trackNowPlayingMessage(message) {
+  // Disables the buttons on the currently-tracked card (if any) and starts tracking
+  // `next` instead — or nothing, if omitted. Also used directly by /nowplaying so its
+  // reply becomes the one live-controlled card, instead of leaving stale buttons active
+  // on whatever the auto-posted card was.
+  retireNowPlayingCard(next = null) {
     const previous = this.lastNowPlayingMessage;
-    this.lastNowPlayingMessage = message;
-    if (previous && previous.id !== message.id) {
+    this.lastNowPlayingMessage = next;
+    if (previous && previous.id !== next?.id) {
       previous.edit({ components: [disabledRow(previous.components[0])] }).catch(() => {});
     }
   }
@@ -228,10 +218,7 @@ class GuildQueue {
     this.connection = null;
     this.clearIdleTimer();
     resetSession(this.guildId);
-    if (this.lastNowPlayingMessage) {
-      this.lastNowPlayingMessage.edit({ components: [disabledRow(this.lastNowPlayingMessage.components[0])] }).catch(() => {});
-      this.lastNowPlayingMessage = null;
-    }
+    this.retireNowPlayingCard();
   }
 
   // Empties the upcoming queue only — leaves the current track and voice connection alone.

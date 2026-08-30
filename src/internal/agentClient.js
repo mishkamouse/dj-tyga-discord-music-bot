@@ -17,8 +17,7 @@ function isConfigured() {
   return Boolean(STRANDS_AGENT_URL);
 }
 
-// Shared by /ask and /radio — both just send a query string to the same agent session
-// and get back a natural-language summary; /radio just constructs a more specific one.
+// Sends a query to the guild's agent session and returns its natural-language reply.
 async function askAgent(guildId, query, requestedBy, { timeoutMs = 90_000 } = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);

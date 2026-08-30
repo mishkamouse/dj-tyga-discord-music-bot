@@ -24,7 +24,7 @@ def build_model():
 
         return AnthropicModel(
             # Haiku is Anthropic's cheapest current tier and comfortably handles this
-            # bounded ~10-tool queue-management task — no need for a bigger model here.
+            # bounded, fixed-tool-set queue-management task — no need for a bigger model.
             client_args=client_args,
             model_id=model_id or "claude-haiku-4-5-20251001",
             max_tokens=2048,

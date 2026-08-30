@@ -61,11 +61,10 @@ async function getStreamInfo(track) {
   return { url: info.url, acodec: info.acodec, ext: info.ext };
 }
 
-// Read-only multi-result search — used by the /ask agent to find candidate tracks before
-// deciding what to enqueue. --flat-playlist keeps this fast (no per-result stream resolution).
+// Read-only multi-result search, used directly by /radio (a large single-query pool) and
+// by the /ask agent's search tools (smaller, per-song lookups). --flat-playlist keeps this
+// fast — no per-result stream resolution.
 async function searchYoutube(query, maxResults = 5) {
-  // Capped higher than what the /ask agent tool exposes (it self-limits to 10 for LLM
-  // sanity) — /radio needs a single call to return a large pool (e.g. 30) directly.
   const capped = Math.max(1, Math.min(maxResults, 50));
   const entries = await runYtDlpJsonLines(['--flat-playlist', `ytsearch${capped}:${query.trim()}`]);
   return entries

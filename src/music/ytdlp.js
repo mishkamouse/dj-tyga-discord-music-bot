@@ -17,7 +17,7 @@ const BASE_ARGS = [
   // runs on instead of pulling in Deno (yt-dlp's default runtime) as a separate dependency.
   '--js-runtimes', 'node',
   // PO tokens are supplied automatically by the bgutil-ytdlp-pot-provider sidecar/plugin —
-  // no manual cookie export, ever. See the design doc for why.
+  // no manual cookie export, ever. See "How it works" in the README.
   '--extractor-args', `youtubepot-bgutilhttp:base_url=${POT_PROVIDER_URL}`,
   ...(PLAYER_CLIENTS ? ['--extractor-args', `youtube:player_client=${PLAYER_CLIENTS}`] : []),
 ];

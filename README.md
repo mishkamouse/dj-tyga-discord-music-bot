@@ -78,27 +78,19 @@ front."
 
 ## How it works
 
-```
-                          ┌────────────────────┐
-   Discord  ──gateway──▶  │        bot         │  Node.js / discord.js
-                          │  (this is the only  │  owns the live queue, voice
-                          │  thing that talks    │  connection, and Discord UI
-                          │  to Discord)         │
-                          └─────────┬───────────┘
-                                    │ internal HTTP API (never exposed
-                                    │ outside the container network)
-                          ┌─────────▼───────────┐        ┌──────────────────┐
-                          │   strands-agent      │──────▶│  Anthropic API   │
-                          │  Python / FastAPI /   │       │  (or Bedrock /   │
-                          │  Strands Agents SDK   │       │   Ollama, etc.)  │
-                          │  only used by /ask    │       └──────────────────┘
-                          │  and /radio           │
-                          └───────────────────────┘
+```mermaid
+flowchart TD
+    Discord((Discord)) <-->|gateway websocket + voice UDP| Bot
 
-                          ┌───────────────────────┐
-   bot ──HTTP──▶          │     pot-provider       │  generates YouTube anti-bot
-                          │  (BotGuard attestation) │  tokens automatically, no
-                          └───────────────────────┘  manual cookies ever needed
+    Bot["<b>bot</b> — Node.js / discord.js<br/>the only service that talks to Discord;<br/>owns the queue, voice connection, and UI"]
+    Bot -->|"/ask, /radio queries"| Agent
+    Agent -->|"tool calls, via internal API"| Bot
+    Bot -->|PO token requests| Pot
+
+    Agent["<b>strands-agent</b> — Python / FastAPI<br/>Strands Agents SDK · powers /ask and /radio"]
+    Agent -->|model calls| LLM[("Anthropic API<br/>or Bedrock / Ollama")]
+
+    Pot["<b>pot-provider</b><br/>runs BotGuard attestation itself,<br/>serves fresh YouTube anti-bot tokens"]
 ```
 
 Three containers, always running together. Every internal port (the bot's own API, the
@@ -125,7 +117,7 @@ automatically. This is the standard, actively-maintained way bots solve this tod
 end-to-end-encryption protocol on all voice calls now; an older client's connection gets
 silently closed the moment it tries to actually stream, well after login/gateway/REST
 calls all succeed normally. See [Troubleshooting](#troubleshooting--operational-notes)
-for the full story — this was the single hardest bug to track down while building this.
+for the full failure signature.
 
 **Why `/ask` and `/radio` are architected differently:** `/ask` needs genuine reasoning
 (picking specific real songs, deciding what "high energy" means, chaining several tool
@@ -310,22 +302,19 @@ is needed at all; every container only makes outbound connections.
 
 ## Project layout
 
-```
-src/
-  index.js                 bootstrap: client login, command registration, interaction routing
-  commands/                one file per slash command
-  music/
-    GuildQueue.js           per-guild queue/player state machine — the single source of truth
-    resolve.js              yt-dlp wrapper: search, URL/playlist resolution, stream resolution
-    audioResource.js        builds a Discord audio resource (WebM/Opus fast path + ffmpeg fallback)
-    ytdlp.js                low-level yt-dlp subprocess wrapper, PO-token wiring
-    queueManager.js         guildId -> GuildQueue registry
-  discord/
-    embeds.js, components.js, format.js   rich embed/button UI builders
-    buttonHandler.js        routes "Now Playing" card button clicks back into GuildQueue
-  internal/
-    api.js                  internal HTTP API the agent's tools call (never exposed externally)
-    agentClient.js           bot-side client for the strands-agent sidecar
-agent/                       Python/FastAPI Strands Agents sidecar (powers /ask and /radio)
-  app.py, model.py, tools.py, interventions.py
-```
+- **`src/index.js`** — bootstrap: client login, command registration, interaction routing
+- **`src/commands/`** — one file per slash command
+- **`src/music/`**
+  - `GuildQueue.js` — per-guild queue/player state machine, the single source of truth
+  - `resolve.js` — yt-dlp wrapper: search, URL/playlist resolution, stream resolution
+  - `audioResource.js` — builds a Discord audio resource (WebM/Opus fast path + ffmpeg fallback)
+  - `ytdlp.js` — low-level yt-dlp subprocess wrapper, PO-token wiring
+  - `queueManager.js` — guildId → `GuildQueue` registry
+- **`src/discord/`**
+  - `embeds.js`, `components.js`, `format.js` — rich embed/button UI builders
+  - `buttonHandler.js` — routes "Now Playing" card button clicks back into `GuildQueue`
+- **`src/internal/`**
+  - `api.js` — internal HTTP API the agent's tools call (never exposed externally)
+  - `agentClient.js` — bot-side client for the strands-agent sidecar
+- **`agent/`** — Python/FastAPI Strands Agents sidecar (powers `/ask` and `/radio`):
+  `app.py`, `model.py`, `tools.py`, `interventions.py`

@@ -45,7 +45,7 @@ async function handleButtonInteraction(interaction) {
       return;
   }
 
-  queue.trackNowPlayingMessage(interaction.message);
+  queue.retireNowPlayingCard(interaction.message);
   return interaction.update({ embeds: [nowPlayingEmbed(queue)], components: [nowPlayingButtons(queue)] });
 }
 

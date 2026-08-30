@@ -11,6 +11,6 @@ module.exports = {
 
     await interaction.reply({ embeds: [nowPlayingEmbed(queue)], components: [nowPlayingButtons(queue)] });
     const message = await interaction.fetchReply();
-    queue.trackNowPlayingMessage(message);
+    queue.retireNowPlayingCard(message);
   },
 };
