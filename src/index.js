@@ -5,6 +5,7 @@ const path = require('node:path');
 const { Client, GatewayIntentBits, Collection, REST, Routes } = require('discord.js');
 const { startInternalApi } = require('./internal/api');
 const { handleButtonInteraction } = require('./discord/buttonHandler');
+const { peekQueue } = require('./music/queueManager');
 
 startInternalApi();
 
@@ -71,6 +72,19 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.reply(payload).catch(() => {});
     }
   }
+});
+
+// Drives 24/7 mode's "alone for over an hour" timeout — irrelevant for every guild that
+// doesn't have an active queue in 24/7 mode, which peekQueue's no-create lookup keeps cheap.
+client.on('voiceStateUpdate', (oldState, newState) => {
+  const queue = peekQueue(newState.guild.id);
+  if (!queue?.persistent || !queue.connection) return;
+
+  const channelId = queue.connection.joinConfig.channelId;
+  if (oldState.channelId !== channelId && newState.channelId !== channelId) return;
+
+  const channel = newState.guild.channels.cache.get(channelId);
+  if (channel) queue.checkAlone(channel);
 });
 
 client.login(process.env.DISCORD_TOKEN);

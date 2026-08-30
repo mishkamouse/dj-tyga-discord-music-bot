@@ -68,6 +68,7 @@ you in plain English.
 | `/remove <index>` | Remove a specific track from the queue by position. |
 | `/shuffle` | Shuffle the upcoming queue. |
 | `/loop <off\|track\|queue>` | Set the loop mode. |
+| `/247` | Toggle 24/7 mode — stay connected indefinitely instead of leaving on an empty queue (see below). |
 | `/ask <query>` | Tell the bot what you want in plain language; the assistant figures out the tool calls. *(optional — needs an LLM provider configured)* |
 | `/radio [query]` | Start a continuous shuffled rotation. No query = a configurable default topic. *(optional — needs an LLM provider configured, though it makes no LLM calls itself)* |
 
@@ -75,6 +76,12 @@ The "Now Playing" card's buttons cover pause/resume, skip, stop, shuffle, and lo
 everything the most common single-click actions need — while `/ask` covers anything
 harder to express as a button, like "skip the next three songs" or "move that to the
 front."
+
+`/247` replaces the normal empty-queue idle timeout with a much longer one based on
+whether anyone else is actually in the channel — the bot stays connected through an empty
+queue indefinitely, and only leaves if a human manually stops it or the channel has had no
+other members for over an hour (`ALONE_TIMEOUT_MS`). Running `/247` again turns it off and
+restores the normal timeout immediately.
 
 ## How it works
 
@@ -210,6 +217,7 @@ All variables live in `.env` (copy from `.env.example`). Grouped by what they af
 | `YTDLP_POT_PROVIDER_URL` | Where `pot-provider` is reachable. Compose overrides this automatically. |
 | `YTDLP_PLAYER_CLIENTS` | Leave blank — let yt-dlp choose Innertube clients itself. See [Troubleshooting](#troubleshooting--operational-notes). |
 | `QUEUE_IDLE_TIMEOUT_MS` | How long an empty queue waits before the bot leaves voice. Default 5 minutes. |
+| `ALONE_TIMEOUT_MS` | In 24/7 mode (`/247`), how long the bot tolerates an empty channel before giving up anyway. Default 1 hour. |
 | `STRANDS_AGENT_URL` | Base URL for the agent sidecar. **Leave blank to disable `/ask` and `/radio` entirely.** |
 | `INTERNAL_API_PORT` | Port the bot's internal queue API listens on (never published to the host). |
 | `STRANDS_MODEL_PROVIDER` | `anthropic` (default), `bedrock`, or `ollama` — see `agent/model.py`. |

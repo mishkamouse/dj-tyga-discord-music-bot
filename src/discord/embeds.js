@@ -26,6 +26,7 @@ function nowPlayingEmbed(queue) {
     .addFields(
       { name: 'Requested by', value: track.requestedBy || 'Unknown', inline: true },
       { name: 'Loop', value: LOOP_LABEL[queue.loopMode] ?? 'Off', inline: true },
+      ...(queue.persistent ? [{ name: '24/7', value: 'On', inline: true }] : []),
       { name: 'Up next', value: queue.tracks[0] ? queue.tracks[0].title : '*Queue is empty*', inline: false },
     );
   const thumb = thumbnailUrl(track.url);

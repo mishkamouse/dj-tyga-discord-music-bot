@@ -13,6 +13,7 @@ const { nowPlayingEmbed } = require('../discord/embeds');
 const { nowPlayingButtons, disabledRow } = require('../discord/components');
 
 const IDLE_TIMEOUT_MS = Number(process.env.QUEUE_IDLE_TIMEOUT_MS) || 5 * 60 * 1000;
+const ALONE_TIMEOUT_MS = Number(process.env.ALONE_TIMEOUT_MS) || 60 * 60 * 1000;
 
 class GuildQueue {
   constructor(guildId) {
@@ -36,6 +37,12 @@ class GuildQueue {
     this.pausedAt = null;
     this.pausedMsTotal = 0;
     this.lastNowPlayingMessage = null;
+
+    // 24/7 mode (/247): suppresses the empty-queue idle timeout below, replaced by a
+    // separate, much longer timeout that only fires once the voice channel itself has had
+    // no other members for a while — see checkAlone().
+    this.persistent = false;
+    this.aloneTimer = null;
 
     this.player.on(AudioPlayerStatus.Idle, () => this.onTrackEnd());
     this.player.on('error', (error) => {
@@ -70,6 +77,8 @@ class GuildQueue {
       this.connection?.destroy();
       this.connection = null;
       this.killActiveProcess();
+      this.clearAloneTimer();
+      this.persistent = false;
       if (this.current) {
         this.tracks.unshift(this.current);
         this.current = null;
@@ -217,6 +226,8 @@ class GuildQueue {
     this.connection?.destroy();
     this.connection = null;
     this.clearIdleTimer();
+    this.clearAloneTimer();
+    this.persistent = false;
     resetSession(this.guildId);
     this.retireNowPlayingCard();
   }
@@ -267,11 +278,45 @@ class GuildQueue {
 
   startIdleTimer() {
     this.clearIdleTimer();
+    if (this.persistent) return; // 24/7 mode — an empty queue alone never disconnects
     this.idleTimer = setTimeout(() => {
       this.connection?.destroy();
       this.connection = null;
       resetSession(this.guildId);
     }, IDLE_TIMEOUT_MS);
+  }
+
+  enablePersistent() {
+    this.persistent = true;
+    this.clearIdleTimer();
+  }
+
+  // Turns 24/7 mode off and, if the queue happens to be idle right now, starts the normal
+  // empty-queue timeout immediately rather than waiting for the next track to end.
+  disablePersistent() {
+    this.persistent = false;
+    this.clearAloneTimer();
+    if (!this.current) this.startIdleTimer();
+  }
+
+  // Call whenever voice-channel membership changes for the channel this queue is
+  // connected to. Only does anything in 24/7 mode — otherwise the normal empty-queue
+  // timeout already handles walking away on its own.
+  checkAlone(voiceChannel) {
+    if (!this.persistent || !this.connection) return;
+    const hasOthers = voiceChannel.members.some((m) => !m.user.bot);
+    if (hasOthers) this.clearAloneTimer();
+    else this.startAloneTimer();
+  }
+
+  startAloneTimer() {
+    if (this.aloneTimer) return; // already counting down
+    this.aloneTimer = setTimeout(() => this.stop(), ALONE_TIMEOUT_MS);
+  }
+
+  clearAloneTimer() {
+    if (this.aloneTimer) clearTimeout(this.aloneTimer);
+    this.aloneTimer = null;
   }
 
   clearIdleTimer() {

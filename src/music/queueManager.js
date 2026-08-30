@@ -11,4 +11,11 @@ function getQueue(guildId) {
   return queue;
 }
 
-module.exports = { getQueue };
+// Read-only lookup — never creates one. Used by handlers that fire for every guild's
+// voice activity (e.g. voiceStateUpdate) and should ignore guilds with no active queue
+// instead of spinning one up just to look at it.
+function peekQueue(guildId) {
+  return queues.get(guildId);
+}
+
+module.exports = { getQueue, peekQueue };
