@@ -4,10 +4,10 @@ const { getQueue } = require('../music/queueManager');
 const { searchYoutube } = require('../music/resolve');
 const { mapWithConcurrency } = require('../music/concurrency');
 const radioStore = require('../music/radioStore');
-const { reconcile } = require('../music/radioManager');
+const { dropArtist, addArtistSongs } = require('../music/radioManager');
 
 // Internal-only API for the Strands agent sidecar's tools. Never exposed outside the
-// compose network (no published port) — this is the sole surface the LLM can act through,
+// compose network (no published port). This is the sole surface the LLM can act through,
 // and every route is scoped to the guildId in the path, which the agent never controls
 // (it's fixed per-session on the Python side from the original Discord interaction).
 const PORT = Number(process.env.INTERNAL_API_PORT) || 8100;
@@ -77,7 +77,7 @@ async function handle(req, res) {
     }
 
     // Bulk variant of /search for building a large pool (e.g. /radio) in a handful of
-    // round trips instead of one per song — each query is independent, so one bad/empty
+    // round trips instead of one per song. Each query is independent, so one bad or empty
     // result doesn't fail the rest.
     if (req.method === 'POST' && rest === 'search/batch') {
       const { queries, maxResultsPerQuery } = await readJsonBody(req);
@@ -107,7 +107,7 @@ async function handle(req, res) {
       if (valid.length === 0) return json(res, 400, { error: 'no valid tracks (need a youtube.com/youtu.be url + title)' });
 
       // position="now" needs the "was something already playing" check to happen before
-      // enqueue() — if the queue was already idle, enqueue() auto-starts the first new
+      // enqueue(). If the queue was already idle, enqueue() auto-starts the first new
       // track itself, and skipping afterward would skip straight past it.
       const wasPlaying = Boolean(queue.current);
       queue.enqueue(
@@ -190,7 +190,7 @@ async function handle(req, res) {
       const { artist } = await readJsonBody(req);
       if (!artist || typeof artist !== 'string') return json(res, 400, { error: 'artist is required' });
       const artists = radioStore.addArtist(guildId, artist);
-      if (queue.radioMode) await reconcile(queue, guildId);
+      if (queue.radioMode) await addArtistSongs(queue, artist, 'assistant');
       return json(res, 200, { artists });
     }
 
@@ -198,7 +198,7 @@ async function handle(req, res) {
       const { artist } = await readJsonBody(req);
       if (!artist || typeof artist !== 'string') return json(res, 400, { error: 'artist is required' });
       const artists = radioStore.removeArtist(guildId, artist);
-      if (queue.radioMode) await reconcile(queue, guildId);
+      dropArtist(queue, artist);
       return json(res, 200, { artists });
     }
 

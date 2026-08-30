@@ -1,7 +1,7 @@
 name: Deploy app
 
-# Auto-deploys app code changes to the live dj-tyga EC2 instance via SSM Run Command — no
-# SSH, no stored AWS keys (OIDC → infra/oidc.yaml's AppDeployRole). Infra changes
+# Auto-deploys app code changes to the live dj-tyga EC2 instance via SSM Run Command. No
+# SSH, no stored AWS keys (OIDC, infra/oidc.yaml's AppDeployRole). Infra changes
 # (infra/**) are handled by deploy-infra.yml instead, and stay a deliberate, manually
 # triggered action rather than firing on every push. See infra/README.md.
 on:

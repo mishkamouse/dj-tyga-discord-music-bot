@@ -1,7 +1,7 @@
 const STRANDS_AGENT_URL = process.env.STRANDS_AGENT_URL || '';
 
-// Fire-and-forget: dropping a guild's agent memory a little late (or not at all, if the
-// sidecar isn't running) is harmless — the next /ask just gets a fresh session either way.
+// Fire-and-forget: dropping a guild's agent memory a little late, or not at all if the
+// sidecar isn't running, is harmless. The next /ask just gets a fresh session either way.
 function resetSession(guildId) {
   if (!STRANDS_AGENT_URL) return;
   fetch(`${STRANDS_AGENT_URL}/reset`, {

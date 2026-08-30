@@ -74,8 +74,8 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-// Drives 24/7 mode's "alone for over an hour" timeout — irrelevant for every guild that
-// doesn't have an active queue in 24/7 mode, which peekQueue's no-create lookup keeps cheap.
+// Drives 24/7 mode's alone-for-over-an-hour timeout. Irrelevant for any guild without an
+// active 24/7 queue, which peekQueue's no-create lookup keeps cheap to check.
 client.on('voiceStateUpdate', (oldState, newState) => {
   const queue = peekQueue(newState.guild.id);
   if (!queue?.persistent || !queue.connection) return;

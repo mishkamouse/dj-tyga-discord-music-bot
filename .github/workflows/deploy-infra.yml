@@ -1,10 +1,10 @@
 name: Deploy infra
 
-# Manual only (workflow_dispatch) — infra changes stay a deliberate, reviewed action
+# Manual only (workflow_dispatch): infra changes stay a deliberate, reviewed action
 # rather than firing on every push, unlike deploy-app.yml. Updates the dj-tyga
 # CloudFormation stack (infra/main.yaml) via a change set. Requires infra/oidc.yaml to
-# already be deployed by hand once, and these repo variables set (Settings → Secrets and
-# variables → Actions → Variables) — see infra/README.md for where each value comes from:
+# already be deployed by hand once, and these repo variables set (Settings > Secrets and
+# variables > Actions > Variables). See infra/README.md for where each value comes from:
 #   AWS_REGION, AWS_INFRA_DEPLOY_ROLE_ARN, AWS_CFN_SERVICE_ROLE_ARN,
 #   DJ_TYGA_SECRET_ARN, DJ_TYGA_GITHUB_ORG_REPO
 on:

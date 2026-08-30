@@ -38,7 +38,7 @@ module.exports = {
       await interaction.editReply({ embeds: [assistantReplyEmbed(reply)] });
     } catch (err) {
       console.error(`[guild ${interaction.guildId}] /ask failed:`, err.message);
-      await interaction.editReply("Couldn't reach the assistant — try again in a moment.");
+      await interaction.editReply("Couldn't reach the assistant. Try again in a moment.");
     }
   },
 };

@@ -1,6 +1,6 @@
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 
-// customIds are self-contained (no guildId embedded) — the interaction itself always
+// customIds are self-contained (no guildId embedded). The interaction itself always
 // carries the guild it came from, so the button handler just reads interaction.guildId.
 function nowPlayingButtons(queue) {
   const paused = queue.isPaused();
@@ -9,6 +9,8 @@ function nowPlayingButtons(queue) {
   ];
   const loopLabel = { off: '🔁 Loop', track: '🔂 Track', queue: '🔁 Queue' }[queue.loopMode];
 
+  // No Stop button. It clears the queue and disconnects entirely, too mutative for a
+  // one-click card button. Use /stop instead.
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('mb:playpause')
@@ -16,7 +18,6 @@ function nowPlayingButtons(queue) {
       .setEmoji(paused ? '▶️' : '⏸️')
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('mb:skip').setLabel('Skip').setEmoji('⏭️').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('mb:stop').setLabel('Stop').setEmoji('⏹️').setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId('mb:shuffle').setLabel('Shuffle').setEmoji('🔀').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('mb:loop').setLabel(loopLabel).setStyle(loopStyle),
   );

@@ -7,7 +7,7 @@ module.exports = {
     const queue = getQueue(interaction.guildId);
     if (queue.persistent) {
       queue.clearPlayback();
-      return interaction.reply("Stopped and cleared the queue — still here for 24/7.");
+      return interaction.reply("Stopped and cleared the queue. Still here for 24/7.");
     }
     queue.stop();
     await interaction.reply('Stopped and cleared the queue.');

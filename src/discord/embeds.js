@@ -2,10 +2,10 @@ const { EmbedBuilder } = require('discord.js');
 const { formatDuration, progressBar, thumbnailUrl, truncate } = require('./format');
 
 const COLOR = {
-  nowPlaying: 0x1db954, // spotify-ish green — "something is playing"
-  queue: 0x5865f2, // discord blurple — neutral state view
-  added: 0x57f287, // green — successful add
-  assistant: 0xeb459e, // pink — /ask, /radio (the LLM talking)
+  nowPlaying: 0x1db954, // spotify-ish green: "something is playing"
+  queue: 0x5865f2, // discord blurple: neutral state view
+  added: 0x57f287, // green: successful add
+  assistant: 0xeb459e, // pink: /ask, /radio (the LLM talking)
 };
 
 const LOOP_LABEL = { off: 'Off', track: 'Track', queue: 'Queue' };
@@ -46,7 +46,7 @@ function queueEmbed(queue, page = 0) {
   if (queue.current) {
     embed.addFields({
       name: 'Now playing',
-      value: `**[${queue.current.title}](${queue.current.url})** — ${formatDuration(queue.current.duration)} · requested by ${queue.current.requestedBy || 'Unknown'}${queue.isPaused() ? ' *(paused)*' : ''}`,
+      value: `**[${queue.current.title}](${queue.current.url})** · ${formatDuration(queue.current.duration)} · requested by ${queue.current.requestedBy || 'Unknown'}${queue.isPaused() ? ' *(paused)*' : ''}`,
     });
     const thumb = thumbnailUrl(queue.current.url);
     if (thumb) embed.setThumbnail(thumb);
@@ -57,7 +57,7 @@ function queueEmbed(queue, page = 0) {
   } else {
     const lines = pageTracks.map(
       (t, i) =>
-        `**${start + i + 1}.** [${truncate(t.title, 80)}](${t.url}) — ${formatDuration(t.duration)} · ${t.requestedBy || 'Unknown'}`,
+        `**${start + i + 1}.** [${truncate(t.title, 80)}](${t.url}) · ${formatDuration(t.duration)} · ${t.requestedBy || 'Unknown'}`,
     );
     embed.addFields({ name: 'Up next', value: truncate(lines.join('\n'), 1024) });
   }
@@ -104,7 +104,7 @@ function radioStartedEmbed(artists, count) {
 function radioArtistsEmbed(artists) {
   const embed = new EmbedBuilder().setColor(COLOR.queue).setAuthor({ name: '📻 Radio rotation' });
   embed.setDescription(
-    artists.length === 0 ? 'No artists yet — add one with `/radio add`.' : artists.map((a) => `• ${a}`).join('\n'),
+    artists.length === 0 ? 'No artists yet. Add one with `/radio add`.' : artists.map((a) => `• ${a}`).join('\n'),
   );
   return embed;
 }

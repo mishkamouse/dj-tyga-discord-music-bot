@@ -11,9 +11,8 @@ function getQueue(guildId) {
   return queue;
 }
 
-// Read-only lookup — never creates one. Used by handlers that fire for every guild's
-// voice activity (e.g. voiceStateUpdate) and should ignore guilds with no active queue
-// instead of spinning one up just to look at it.
+// Read-only: never creates a queue. Used by voiceStateUpdate and similar handlers that
+// fire for every guild and shouldn't spin one up just to look.
 function peekQueue(guildId) {
   return queues.get(guildId);
 }

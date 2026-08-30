@@ -2,7 +2,7 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Bootstrap stack for DJ Tyga's AWS deployment: a GitHub Actions OIDC provider plus three
   narrowly-scoped roles (app-deploy, infra-deploy, and the CloudFormation service role
-  infra-deploy hands off to). Deploy this ONCE, by hand, before main.yaml — the workflows
+  infra-deploy hands off to). Deploy this ONCE, by hand, before main.yaml: the workflows
   that use these roles can't create the roles they need to run.
   See infra/README.md for the exact deploy command.
 
@@ -16,10 +16,10 @@ Parameters:
     Description: Name of the main.yaml stack infra-deploy-role and the PassRole condition are scoped to.
 
 Resources:
-  # AWS's own trust store validates GitHub's OIDC provider now, not this thumbprint — the
+  # AWS's own trust store validates GitHub's OIDC provider now, not this thumbprint. The
   # field is still required by the resource schema, so these are GitHub's two published
-  # intermediary-cert thumbprints (either can be returned; effectively a formality now,
-  # not the actual security boundary).
+  # intermediary-cert thumbprints (either can be returned), effectively a formality now,
+  # not the actual security boundary.
   GitHubOidcProvider:
     Type: AWS::IAM::OIDCProvider
     Properties:
@@ -30,9 +30,9 @@ Resources:
         - 6938fd4d98bab03faadb97b34396831e3780aea1
         - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
 
-  # Assumable only by CloudFormation itself (never directly by the GitHub Actions
-  # identity) — this is what actually creates/updates the VPC/EC2/EFS/IAM/logs resources
-  # in main.yaml. Keeping the broad create permissions here, and only handing
+  # Assumable only by CloudFormation itself, never directly by the GitHub Actions
+  # identity. This is what actually creates and updates the VPC/EC2/EFS/IAM/logs
+  # resources in main.yaml. Keeping the broad create permissions here, and only handing
   # InfraDeployRole the narrow ability to ask CloudFormation to assume it, means the CI
   # identity itself never holds these permissions directly.
   CfnServiceRole:
@@ -53,17 +53,85 @@ Resources:
             Statement:
               # Most EC2/VPC "create network" actions don't support resource-level IAM
               # restriction at all (a well-known AWS API limitation, not a choice made
-              # here) — blast radius is instead contained by this role only being
+              # here). Blast radius is instead contained by this role only being
               # assumable by CloudFormation, and only for the one dj-tyga stack (enforced
-              # by InfraDeployRole's PassRole condition below).
+              # by InfraDeployRole's PassRole condition below). Actions ARE narrowed,
+              # though, to exactly what main.yaml's resources need (VPC/subnet/IGW/route
+              # table, the two security groups, the launch template, and the ASG) rather
+              # than a blanket ec2:*/autoscaling:*. A compromised or malicious change to
+              # this stack still can't touch EC2/ASG resources this role was never granted
+              # actions for; RunInstances, TerminateInstances, and StopInstances are
+              # absent, since nothing here directly launches instances (the ASG does that
+              # under its own service-linked role).
               - Sid: Ec2NetworkAndCompute
                 Effect: Allow
                 Action:
-                  - ec2:*
-                  - autoscaling:*
-                  - elasticfilesystem:*
+                  - ec2:CreateVpc
+                  - ec2:DeleteVpc
+                  - ec2:DescribeVpcs
+                  - ec2:ModifyVpcAttribute
+                  - ec2:DescribeVpcAttribute
+                  - ec2:CreateSubnet
+                  - ec2:DeleteSubnet
+                  - ec2:DescribeSubnets
+                  - ec2:ModifySubnetAttribute
+                  - ec2:CreateInternetGateway
+                  - ec2:DeleteInternetGateway
+                  - ec2:AttachInternetGateway
+                  - ec2:DetachInternetGateway
+                  - ec2:DescribeInternetGateways
+                  - ec2:CreateRouteTable
+                  - ec2:DeleteRouteTable
+                  - ec2:CreateRoute
+                  - ec2:DeleteRoute
+                  - ec2:ReplaceRoute
+                  - ec2:AssociateRouteTable
+                  - ec2:DisassociateRouteTable
+                  - ec2:DescribeRouteTables
+                  - ec2:CreateSecurityGroup
+                  - ec2:DeleteSecurityGroup
+                  - ec2:DescribeSecurityGroups
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:AuthorizeSecurityGroupEgress
+                  - ec2:RevokeSecurityGroupEgress
+                  - ec2:UpdateSecurityGroupRuleDescriptionsIngress
+                  - ec2:UpdateSecurityGroupRuleDescriptionsEgress
+                  - ec2:CreateLaunchTemplate
+                  - ec2:DeleteLaunchTemplate
+                  - ec2:CreateLaunchTemplateVersion
+                  - ec2:ModifyLaunchTemplate
+                  - ec2:DescribeLaunchTemplates
+                  - ec2:DescribeLaunchTemplateVersions
+                  - ec2:CreateTags
+                  - ec2:DeleteTags
+                  - ec2:DescribeTags
+                  - ec2:DescribeAvailabilityZones
+                  - ec2:DescribeAccountAttributes
+                  - autoscaling:CreateAutoScalingGroup
+                  - autoscaling:DeleteAutoScalingGroup
+                  - autoscaling:UpdateAutoScalingGroup
+                  - autoscaling:DescribeAutoScalingGroups
+                  - autoscaling:CreateOrUpdateTags
+                  - autoscaling:DeleteTags
+                  - autoscaling:DescribeTags
+                  - autoscaling:DescribeScalingActivities
+                  - elasticfilesystem:CreateFileSystem
+                  - elasticfilesystem:DeleteFileSystem
+                  - elasticfilesystem:DescribeFileSystems
+                  - elasticfilesystem:UpdateFileSystem
+                  - elasticfilesystem:CreateMountTarget
+                  - elasticfilesystem:DeleteMountTarget
+                  - elasticfilesystem:DescribeMountTargets
+                  - elasticfilesystem:DescribeMountTargetSecurityGroups
+                  - elasticfilesystem:TagResource
+                  - elasticfilesystem:UntagResource
+                  - elasticfilesystem:ListTagsForResource
+                  - elasticfilesystem:CreateTags
+                  - elasticfilesystem:DeleteTags
+                  - elasticfilesystem:DescribeTags
                 Resource: '*'
-              # First-ever ASG in this account needs its service-linked role created —
+              # First-ever ASG in this account needs its service-linked role created,
               # scoped to exactly that one AWS-managed role, per AWS's own recommended
               # pattern for granting this action.
               - Sid: CreateAsgServiceLinkedRole
@@ -81,7 +149,7 @@ Resources:
                   - logs:PutRetentionPolicy
                   - logs:TagResource
                 Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/dj-tyga/*'
-              # DescribeLogGroups is a list-style call — CloudFormation uses it to resolve
+              # DescribeLogGroups is a list-style call. CloudFormation uses it to resolve
               # AWS::Logs::LogGroup's Arn attribute (Fn::GetAtt), and like the EC2 actions
               # above, it doesn't support resource-level scoping the way the mutating
               # actions do.
@@ -148,8 +216,8 @@ Resources:
                 Effect: Allow
                 Action: ssm:SendCommand
                 Resource: !Sub 'arn:aws:ssm:${AWS::Region}::document/AWS-RunShellScript'
-              # Neither polling action supports resource-level permissions in the SSM API —
-              # accepted here since both are read-only (poll a command's result) and
+              # Neither polling action supports resource-level permissions in the SSM API.
+              # Accepted here since both are read-only (poll a command's result) and
               # SendCommand above is what's actually access-controlled.
               - Sid: PollCommandResult
                 Effect: Allow

@@ -1,11 +1,11 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-// Per-guild radio artist rotation — persisted to disk so it survives bot restarts and
-// redeploys, not just the lifetime of a queue session (unlike everything else in
-// GuildQueue). A plain JSON file is enough for a small list of strings per guild; no need
-// for a database here. Mount ./data as a volume in docker-compose so this actually survives
-// `docker compose up -d --build`, not just `docker compose restart`.
+// Per-guild radio artist rotation, persisted to disk so it survives bot restarts and
+// redeploys, not just a queue session (unlike everything else in GuildQueue). A plain
+// JSON file is enough for a small list of strings; no database needed. Mount ./data as a
+// volume in docker-compose so it survives `docker compose up -d --build`, not just
+// `docker compose restart`.
 const STORE_PATH = process.env.RADIO_STORE_PATH || path.join(__dirname, '../../data/radio-artists.json');
 
 let cache = null;
@@ -14,7 +14,14 @@ function load() {
   if (cache) return cache;
   try {
     cache = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
-  } catch {
+  } catch (err) {
+    // ENOENT (no file yet) is expected and starts empty silently. Anything else, a
+    // corrupted or truncated file, also falls back to empty (best-effort local state, not
+    // worth crashing over) but gets logged, since persist() would otherwise overwrite the
+    // corrupted file with `{}` on the next write and lose it for good.
+    if (err.code !== 'ENOENT') {
+      console.error(`[radio] failed to read ${STORE_PATH}, starting with an empty rotation:`, err.message);
+    }
     cache = {};
   }
   return cache;

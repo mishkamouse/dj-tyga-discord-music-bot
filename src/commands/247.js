@@ -4,13 +4,13 @@ const { getQueue } = require('../music/queueManager');
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('247')
-    .setDescription('Toggle 24/7 mode — stay connected indefinitely instead of leaving on an empty queue'),
+    .setDescription('Toggle 24/7 mode: stay connected indefinitely instead of leaving on an empty queue'),
   async execute(interaction) {
     const queue = getQueue(interaction.guildId);
 
     if (queue.persistent) {
       queue.disablePersistent();
-      return interaction.reply("24/7 mode off — back to leaving after a few minutes of an empty queue.");
+      return interaction.reply("24/7 mode off. Back to leaving after a few minutes of an empty queue.");
     }
 
     const voiceChannel = interaction.member.voice.channel;
@@ -26,6 +26,6 @@ module.exports = {
     queue.enablePersistent();
     queue.checkAlone(voiceChannel);
 
-    await interaction.reply("24/7 mode on — I'll stay connected unless you all leave.");
+    await interaction.reply("24/7 mode on. I'll stay connected unless you all leave.");
   },
 };

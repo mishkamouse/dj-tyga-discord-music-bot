@@ -11,7 +11,8 @@ const { buildResource } = require('./audioResource');
 const { resetSession } = require('../internal/agentClient');
 const { nowPlayingEmbed } = require('../discord/embeds');
 const { nowPlayingButtons, disabledRow } = require('../discord/components');
-const radioStore = require('./radioStore');
+const { shuffleArray } = require('./shuffle');
+const radioManager = require('./radioManager');
 
 const IDLE_TIMEOUT_MS = Number(process.env.QUEUE_IDLE_TIMEOUT_MS) || 5 * 60 * 1000;
 const ALONE_TIMEOUT_MS = Number(process.env.ALONE_TIMEOUT_MS) || 60 * 60 * 1000;
@@ -32,23 +33,24 @@ class GuildQueue {
     this.nextStreamInfo = null; // { track, promise } prefetched one track ahead
     this.idleTimer = null;
 
-    // Elapsed-time bookkeeping for the now-playing progress bar — accurate to the
-    // second, which is all a UI display needs.
+    // Elapsed-time bookkeeping for the now-playing progress bar, accurate to the second,
+    // which is all a UI display needs.
     this.currentStartedAt = null;
     this.pausedAt = null;
     this.pausedMsTotal = 0;
     this.lastNowPlayingMessage = null;
 
     // 24/7 mode (/247): suppresses the empty-queue idle timeout below, replaced by a
-    // separate, much longer timeout that only fires once the voice channel itself has had
-    // no other members for a while — see checkAlone().
+    // separate, much longer timeout that only fires once the voice channel has had no
+    // other members for a while. See checkAlone().
     this.persistent = false;
     this.aloneTimer = null;
 
-    // Radio mode (/radio): loopMode is set to 'queue' as an implementation detail, and
-    // tracks pulled in for radio carry a `.artist` tag (see radioManager.js) so this queue
-    // can tell them apart from anything a user queues manually — see enqueue() below.
+    // Radio mode (/radio): tracks carry a `.artist` tag (see radioManager.js) so /radio
+    // remove can drop just that artist's queued tracks. radioManager.maybeTopUp(), called
+    // from playNext() below, keeps the queue from running dry.
     this.radioMode = false;
+    this._radioTopUpInFlight = false; // guards against overlapping top-up fetches
 
     this.player.on(AudioPlayerStatus.Idle, () => this.onTrackEnd());
     this.player.on('error', (error) => {
@@ -70,9 +72,9 @@ class GuildQueue {
     this.connection.subscribe(this.player);
   }
 
-  // A manual disconnect (kicked from the channel, channel deleted, etc.) and a transient
-  // blip (e.g. a voice server move) both land here first — @discordjs/voice recovers from
-  // the latter on its own within a few seconds, so we only treat it as final if it doesn't.
+  // A manual disconnect (kicked, channel deleted) and a transient blip (e.g. a voice
+  // server move) both land here first. @discordjs/voice recovers from the latter on its
+  // own within a few seconds, so this only treats it as final if that doesn't happen.
   async handleDisconnect() {
     try {
       await Promise.race([
@@ -94,10 +96,9 @@ class GuildQueue {
     }
   }
 
-  // Radio never locks the queue, but it also doesn't get knocked out by a manual /play
-  // (or the agent's add_tracks) anymore — a manually-added track just cuts into the
-  // rotation once (see the loop-recycle guard in playNext(): untagged tracks aren't
-  // recycled, so it plays through and the artist rotation carries on underneath it).
+  // Radio never locks the queue: a manual /play (or the agent's add_tracks) just adds a
+  // track like normal, and radioManager.maybeTopUp() keeps the flow of artist songs going
+  // underneath it regardless of what else ends up here.
   enqueue(tracks, { atFront = false } = {}) {
     this.clearIdleTimer();
 
@@ -113,21 +114,7 @@ class GuildQueue {
   async playNext() {
     if (this.current) {
       if (this.loopMode === 'track') this.tracks.unshift(this.current);
-      else if (this.loopMode === 'queue') {
-        if (this.radioMode) {
-          // Only radio-sourced tracks are part of the permanent rotation — a manually
-          // added track (no .artist tag) plays once and doesn't loop back in, and a
-          // radio-sourced one only recycles while its artist is still in the rotation
-          // (otherwise it'd keep resurfacing forever even after reconcile() stripped the
-          // other queued copies at removal time).
-          const stillWanted =
-            this.current.artist &&
-            radioStore.getArtists(this.guildId).some((a) => a.toLowerCase() === this.current.artist.toLowerCase());
-          if (stillWanted) this.tracks.push(this.current);
-        } else {
-          this.tracks.push(this.current);
-        }
-      }
+      else if (this.loopMode === 'queue') this.tracks.push(this.current);
     }
 
     const next = this.tracks.shift();
@@ -137,6 +124,7 @@ class GuildQueue {
       this.current = null;
       this.startIdleTimer();
       this.retireNowPlayingCard();
+      radioManager.maybeTopUp(this);
       return;
     }
 
@@ -158,9 +146,10 @@ class GuildQueue {
       this.pausedMsTotal = 0;
       this.ensurePrefetch();
       this.postNowPlaying();
+      radioManager.maybeTopUp(this);
     } catch (err) {
       console.error(`[guild ${this.guildId}] failed to play "${next.title}":`, err.message);
-      this.textChannel?.send(`Skipping **${next.title}** — couldn't play it (${err.message}).`).catch(() => {});
+      this.textChannel?.send(`Skipping **${next.title}**, couldn't play it (${err.message}).`).catch(() => {});
       this.playNext();
     }
   }
@@ -222,8 +211,8 @@ class GuildQueue {
   }
 
   // Posts a fresh Now Playing card to the last known text channel and retires the
-  // previous one. Best-effort throughout — an old message might be gone, or we might
-  // lack permission by now; none of that should ever break playback.
+  // previous one. Best-effort throughout: an old message might be gone, or permissions
+  // might have changed, and none of that should break playback.
   async postNowPlaying() {
     if (!this.textChannel || !this.current) return;
     this.retireNowPlayingCard();
@@ -239,9 +228,9 @@ class GuildQueue {
   }
 
   // Disables the buttons on the currently-tracked card (if any) and starts tracking
-  // `next` instead — or nothing, if omitted. Also used directly by /nowplaying so its
-  // reply becomes the one live-controlled card, instead of leaving stale buttons active
-  // on whatever the auto-posted card was.
+  // `next` instead, or nothing if omitted. Also used directly by /nowplaying so its reply
+  // becomes the one live-controlled card, instead of leaving stale buttons on the
+  // auto-posted one.
   retireNowPlayingCard(next = null) {
     const previous = this.lastNowPlayingMessage;
     this.lastNowPlayingMessage = next;
@@ -250,10 +239,10 @@ class GuildQueue {
     }
   }
 
-  // Stops playback and empties the queue without necessarily disconnecting — the shared
-  // core of stop() below, and also what /stop uses on its own in 24/7 mode, where clearing
-  // the current queue shouldn't count as the "manually disconnected" override 24/7 promises
-  // to honor (see stop()). startIdleTimer() at the end is a no-op while persistent.
+  // Stops playback and empties the queue without disconnecting. The shared core of
+  // stop() below, and what /stop uses on its own in 24/7 mode, where clearing the queue
+  // shouldn't count as the manual disconnect 24/7 waits for (see stop()).
+  // startIdleTimer() at the end is a no-op while persistent.
   clearPlayback() {
     this.tracks = [];
     this.loopMode = 'off';
@@ -266,10 +255,9 @@ class GuildQueue {
     this.startIdleTimer();
   }
 
-  // Fully ends the session: stops playback, clears the queue, and disconnects from voice —
-  // also turning off 24/7 mode, since actually leaving the channel *is* the manual
-  // disconnect 24/7 mode is waiting for. Used by /leave, /stop outside 24/7 mode, and the
-  // alone-timer giving up after too long with no one else in the channel.
+  // Fully ends the session: stops playback, clears the queue, disconnects from voice, and
+  // turns off 24/7 mode, since leaving the channel is the manual disconnect 24/7 mode
+  // waits for. Used by /leave, /stop outside 24/7 mode, and the alone-timer giving up.
   stop() {
     this.clearPlayback();
     this.connection?.destroy();
@@ -280,8 +268,8 @@ class GuildQueue {
     resetSession(this.guildId);
   }
 
-  // Empties the upcoming queue only — leaves the current track and voice connection alone.
-  // Distinct from stop(), which also disconnects; this is what "clear the queue" means.
+  // Empties the upcoming queue only. Leaves the current track and voice connection alone.
+  // Distinct from stop(), which also disconnects.
   clearQueue() {
     const count = this.tracks.length;
     this.tracks = [];
@@ -294,10 +282,10 @@ class GuildQueue {
     return this.tracks.splice(index, 1)[0];
   }
 
-  // Reorders the upcoming queue — moves the track at fromIndex to toIndex (clamped into
+  // Reorders the upcoming queue: moves the track at fromIndex to toIndex (clamped into
   // range). Stale prefetches are harmless: playNext() only reuses a prefetch when it's
   // still reference-equal to the track it's about to play, so a reorder just means the
-  // next play resolves fresh instead of using a cached prefetch.
+  // next play resolves fresh.
   moveTrack(fromIndex, toIndex) {
     if (fromIndex < 0 || fromIndex >= this.tracks.length) return false;
     const clampedTo = Math.max(0, Math.min(toIndex, this.tracks.length - 1));
@@ -307,10 +295,7 @@ class GuildQueue {
   }
 
   shuffle() {
-    for (let i = this.tracks.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [this.tracks[i], this.tracks[j]] = [this.tracks[j], this.tracks[i]];
-    }
+    shuffleArray(this.tracks);
   }
 
   setLoop(mode) {
@@ -326,7 +311,7 @@ class GuildQueue {
 
   startIdleTimer() {
     this.clearIdleTimer();
-    if (this.persistent) return; // 24/7 mode — an empty queue alone never disconnects
+    if (this.persistent) return; // 24/7 mode: an empty queue alone never disconnects
     this.idleTimer = setTimeout(() => {
       this.connection?.destroy();
       this.connection = null;
@@ -348,8 +333,8 @@ class GuildQueue {
   }
 
   // Call whenever voice-channel membership changes for the channel this queue is
-  // connected to. Only does anything in 24/7 mode — otherwise the normal empty-queue
-  // timeout already handles walking away on its own.
+  // connected to. Only does anything in 24/7 mode; otherwise the normal empty-queue
+  // timeout already handles walking away.
   checkAlone(voiceChannel) {
     if (!this.persistent || !this.connection) return;
     const hasOthers = voiceChannel.members.some((m) => !m.user.bot);

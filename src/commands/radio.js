@@ -1,7 +1,7 @@
 const { SlashCommandBuilder } = require('discord.js');
 const { getQueue } = require('../music/queueManager');
 const radioStore = require('../music/radioStore');
-const { startRadio, reconcile } = require('../music/radioManager');
+const { startRadio, dropArtist, addArtistSongs } = require('../music/radioManager');
 const { radioStartedEmbed, radioArtistsEmbed } = require('../discord/embeds');
 
 module.exports = {
@@ -32,7 +32,18 @@ module.exports = {
     .addSubcommand((sub) => sub.setName('list').setDescription('Show the current artist rotation')),
 
   async execute(interaction) {
-    const sub = interaction.options.getSubcommand();
+    // false = don't throw if missing. The only way this comes back null is a stale
+    // command definition cached client-side (e.g. mid-propagation after switching to
+    // global registration), a Discord-side transient worth a clear message instead of
+    // the generic error.
+    const sub = interaction.options.getSubcommand(false);
+    if (!sub) {
+      return interaction.reply({
+        content:
+          "That didn't come through as a valid /radio command. Discord may still be syncing the command list after a recent update (can take up to an hour). Try again in a bit, or restart your Discord client to force a refresh.",
+        ephemeral: true,
+      });
+    }
     if (sub === 'on') return handleOn(interaction);
     if (sub === 'off') return handleOff(interaction);
     if (sub === 'add') return handleAdd(interaction);
@@ -74,8 +85,7 @@ async function handleOff(interaction) {
     return interaction.reply({ content: 'Radio isn\'t on.', ephemeral: true });
   }
   queue.radioMode = false;
-  queue.setLoop('off');
-  await interaction.reply("Radio mode off — I'll finish what's queued and then stop.");
+  await interaction.reply("Radio mode off. I'll finish what's queued and then stop.");
 }
 
 async function handleAdd(interaction) {
@@ -86,11 +96,11 @@ async function handleAdd(interaction) {
   await interaction.deferReply();
   if (queue.radioMode) {
     try {
-      await reconcile(queue, interaction.guildId);
+      await addArtistSongs(queue, artist, interaction.user.tag);
     } catch (err) {
-      console.error(`[guild ${interaction.guildId}] radio reconcile failed:`, err.message);
+      console.error(`[guild ${interaction.guildId}] radio add-artist top-up failed:`, err.message);
     }
-    return interaction.editReply(`Added **${artist}** to the rotation — the queue now reflects it.`);
+    return interaction.editReply(`Added **${artist}** to the rotation and shuffled their songs into the queue.`);
   }
   return interaction.editReply(`Added **${artist}** to the rotation. Start with \`/radio on\`.`);
 }
@@ -106,17 +116,10 @@ async function handleRemove(interaction) {
 
   const queue = getQueue(interaction.guildId);
   radioStore.removeArtist(interaction.guildId, artist);
+  dropArtist(queue, artist);
 
-  await interaction.deferReply();
-  if (queue.radioMode) {
-    try {
-      await reconcile(queue, interaction.guildId);
-    } catch (err) {
-      console.error(`[guild ${interaction.guildId}] radio reconcile failed:`, err.message);
-    }
-    return interaction.editReply(`Removed **${artist}** from the rotation — the queue now reflects it.`);
-  }
-  return interaction.editReply(`Removed **${artist}** from the rotation.`);
+  const suffix = queue.radioMode ? ', their queued songs are gone too' : '';
+  await interaction.reply(`Removed **${artist}** from the rotation${suffix}.`);
 }
 
 async function handleList(interaction) {

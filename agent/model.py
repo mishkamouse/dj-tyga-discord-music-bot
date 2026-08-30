@@ -1,9 +1,8 @@
 import os
 
 # One env var (STRANDS_MODEL_PROVIDER) picks the model backend, using Strands' own
-# provider abstraction — this is the "flexibility on where the model runs" the whole
-# sidecar is built around. Anthropic is the default for local dev (just needs an API key);
-# Bedrock/Ollama are documented drop-in swaps for later.
+# provider abstraction. Anthropic is the default for local dev (just needs an API key);
+# Bedrock and Ollama are drop-in swaps for later.
 
 
 def build_model():
@@ -14,7 +13,7 @@ def build_model():
         from strands.models.anthropic import AnthropicModel
 
         client_args = {"api_key": os.environ["ANTHROPIC_API_KEY"]}
-        # Only needed for "identity-linked" API keys scoped to multiple workspaces —
+        # Only needed for "identity-linked" API keys scoped to multiple workspaces.
         # Anthropic then requires a workspace id on every request. A key scoped to a
         # single workspace (the default when you create one on platform.claude.com)
         # doesn't need this at all.
@@ -23,8 +22,8 @@ def build_model():
             client_args["workspace_id"] = workspace_id
 
         return AnthropicModel(
-            # Haiku is Anthropic's cheapest current tier and comfortably handles this
-            # bounded, fixed-tool-set queue-management task — no need for a bigger model.
+            # Haiku is Anthropic's cheapest current tier and handles this bounded,
+            # fixed-tool-set queue-management task fine. No need for a bigger model.
             client_args=client_args,
             model_id=model_id or "claude-haiku-4-5-20251001",
             max_tokens=2048,

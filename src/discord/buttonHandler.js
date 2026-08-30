@@ -17,17 +17,10 @@ async function handleButtonInteraction(interaction) {
     return interaction.reply({ content: 'Nothing is playing right now.', ephemeral: true });
   }
 
-  if (action === 'stop') {
-    if (queue.persistent) queue.clearPlayback();
-    else queue.stop();
-    return interaction.update({ embeds: [nowPlayingEmbed(queue)], components: [] });
-  }
-
   if (action === 'skip') {
     queue.skip();
-    // The next track (if any) takes a moment to resolve — playNext() posts its own fresh
-    // card via postNowPlaying() and disables this one, so just acknowledge the click here
-    // rather than racing it with a guess at the new state.
+    // The next track (if any) takes a moment to resolve. playNext() posts its own fresh
+    // card and disables this one, so just acknowledge the click instead of guessing.
     return interaction.deferUpdate();
   }
 

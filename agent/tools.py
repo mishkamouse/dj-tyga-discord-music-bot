@@ -3,7 +3,7 @@ from strands import tool
 
 
 # Every tool here is a thin call to the bot's own internal API, scoped to exactly one
-# guild's queue — never shell, file, or generic network access. guild_id is fixed by this
+# guild's queue: never shell, file, or generic network access. guild_id is fixed by this
 # factory (called once per session, from the original Discord interaction on the Node
 # side) and is never an argument the model can set itself, so even a successful prompt
 # injection can't redirect a tool call at another server's queue.
@@ -12,16 +12,16 @@ def make_tools(guild_id: str, bot_api_url: str):
 
     @tool
     def search_youtube(query: str, max_results: int = 5) -> list[dict]:
-        """Search YouTube for candidate tracks. Read-only — does not change the queue.
+        """Search YouTube for candidate tracks. Read-only, does not change the queue.
         For more than a handful of separate songs (e.g. building a radio-style pool),
-        use search_youtube_batch instead — it's much faster.
+        use search_youtube_batch instead; it's much faster.
 
         Args:
             query: What to search for, e.g. "Kanye West Ultralight Beam".
             max_results: How many candidates to return (max 10).
 
         Returns:
-            A list of candidates, each with title, url, duration (seconds, often null —
+            A list of candidates, each with title, url, duration (seconds, often null;
             search results are song-first and don't always carry duration up front), and
             channel.
         """
@@ -31,19 +31,19 @@ def make_tools(guild_id: str, bot_api_url: str):
 
     @tool
     def search_youtube_batch(queries: list[str]) -> list[dict]:
-        """Search YouTube for many songs at once — one round trip instead of one per
+        """Search YouTube for many songs at once, one round trip instead of one per
         song. Use this whenever you need more than ~5 distinct tracks (e.g. building a
         large radio-style pool), passing one specific song title per query (max 30).
-        Read-only — does not change the queue.
+        Read-only, does not change the queue.
 
         Args:
             queries: Specific song searches, e.g. ["Kanye West Stronger",
                 "Kanye West Gold Digger", "Kanye West Flashing Lights"]. One real song
-                per entry, not a broad topic — pick the actual songs yourself first.
+                per entry, not a broad topic; pick the actual songs yourself first.
 
         Returns:
             A list with one entry per query: {"query": ..., "matches": [...]}. A query
-            with no good match returns an empty matches list — just skip it.
+            with no good match returns an empty matches list; just skip it.
         """
         resp = client.post("/search/batch", json={"queries": queries}, timeout=60.0)
         resp.raise_for_status()
@@ -51,10 +51,10 @@ def make_tools(guild_id: str, bot_api_url: str):
 
     @tool
     def get_queue() -> dict:
-        """Get the full current state of this server's queue — the currently playing
+        """Get the full current state of this server's queue: the currently playing
         track, the upcoming queue in order, whether playback is paused, and the loop
         mode. Call this whenever you need to know what's actually happening before
-        deciding what to do (e.g. don't blindly resume — check "paused" first).
+        deciding what to do (e.g. don't blindly resume; check "paused" first).
 
         Returns:
             An object with "current" (track or null), "tracks" (upcoming, in order),
@@ -66,14 +66,14 @@ def make_tools(guild_id: str, bot_api_url: str):
 
     @tool
     def add_tracks(tracks: list[dict], position: str = "end") -> str:
-        """Add one or more tracks to the queue. Use results from search_youtube — never
+        """Add one or more tracks to the queue. Use results from search_youtube; never
         invent a url. To replace the whole queue, call clear_queue first, then this.
 
-        Important: clear_queue only empties what's queued *behind* the currently playing
-        track — it does not stop that track. If the user wants playback to actually
-        switch to the new tracks right away (e.g. "play X", "clear the queue and play X",
-        "switch to X now"), use position="now", not just clear_queue + the default
-        position — otherwise the new tracks just sit behind whatever's still playing.
+        Important: clear_queue only empties what's queued behind the currently playing
+        track. It does not stop that track. If the user wants playback to switch to the
+        new tracks right away (e.g. "play X", "clear the queue and play X", "switch to X
+        now"), use position="now", not just clear_queue plus the default position;
+        otherwise the new tracks just sit behind whatever's still playing.
 
         Args:
             tracks: Tracks to enqueue, each with "url", "title", and optionally "duration".
@@ -83,7 +83,7 @@ def make_tools(guild_id: str, bot_api_url: str):
 
         Returns:
             A short confirmation of how many tracks were added, and whether playback
-            actually switched to them now — trust this over your own assumption.
+            actually switched to them now. Trust this over your own assumption.
         """
         resp = client.post(
             "/queue/add",
@@ -92,7 +92,7 @@ def make_tools(guild_id: str, bot_api_url: str):
         resp.raise_for_status()
         data = resp.json()
         if data.get("startedNow"):
-            return f"Added {data['added']} track(s) — playback switched to them now."
+            return f"Added {data['added']} track(s), playback switched to them now."
         return f"Added {data['added']} track(s)."
 
     @tool
@@ -111,7 +111,7 @@ def make_tools(guild_id: str, bot_api_url: str):
 
     @tool
     def move_track(from_index: int, to_index: int) -> str:
-        """Reorder the upcoming queue by moving one track to a new position — e.g. to
+        """Reorder the upcoming queue by moving one track to a new position, e.g. to
         play something sooner or later without removing and re-adding it.
 
         Args:
@@ -153,7 +153,7 @@ def make_tools(guild_id: str, bot_api_url: str):
     def skip_current(count: int = 1) -> str:
         """Skip the currently playing track and move to the next one. Pass count > 1 to
         skip several at once (the current track plus the next count-1 queued ones are
-        all skipped over) — e.g. count=3 to jump past the next two upcoming tracks too.
+        all skipped over), e.g. count=3 to jump past the next two upcoming tracks too.
 
         Args:
             count: How many tracks to skip past, including the current one. Default 1.
@@ -196,10 +196,10 @@ def make_tools(guild_id: str, bot_api_url: str):
     @tool
     def add_radio_artist(name: str) -> str:
         """Add an artist to this server's saved radio rotation. Takes effect immediately
-        if radio mode is currently on — the live queue gets topped up with their songs
+        if radio mode is currently on; the live queue gets topped up with their songs
         without interrupting what's playing. If radio mode is off, this just saves the
         artist for the next time someone runs /radio on. This does not start radio itself
-        or touch voice — you have no tool for that; tell the user to run /radio on.
+        or touch voice; you have no tool for that, tell the user to run /radio on.
 
         Args:
             name: Artist name, e.g. "Kanye West".
@@ -214,7 +214,7 @@ def make_tools(guild_id: str, bot_api_url: str):
     @tool
     def remove_radio_artist(name: str) -> str:
         """Remove an artist from this server's saved radio rotation. Takes effect
-        immediately if radio mode is currently on — their not-yet-played songs are pulled
+        immediately if radio mode is currently on; their not-yet-played songs are pulled
         from the live queue (whatever's currently playing finishes normally).
 
         Args:

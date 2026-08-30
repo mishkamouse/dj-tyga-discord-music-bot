@@ -2,20 +2,20 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   DJ Tyga's AWS runtime: a single self-healing EC2 instance (Auto Scaling Group pinned at
   1) running the same four-container Docker Compose stack as local dev, with zero inbound
-  network access (SSM only — see infra/README.md), a persisted /radio artist list on EFS,
+  network access (SSM only, see infra/README.md), a persisted /radio artist list on EFS,
   and container logs shipped to CloudWatch. Deploy infra/oidc.yaml first.
 
 Parameters:
   InstanceType:
     Type: String
     Default: t4g.small
-    Description: Graviton (arm64) by default — every image in this repo is multi-arch.
+    Description: Graviton (arm64) by default; every image in this repo is multi-arch.
   SecretArn:
     Type: String
     Description: >
       ARN of the Secrets Manager secret holding DISCORD_TOKEN, DISCORD_CLIENT_ID,
       ANTHROPIC_API_KEY, and GITHUB_TOKEN (see infra/README.md for the exact JSON shape).
-      Created once by hand, out-of-band — never a resource in this template, so its
+      Created once by hand, out-of-band; never a resource in this template, so its
       plaintext never lands in a CloudFormation template or parameter history.
   GitHubOrgRepo:
     Type: String
@@ -27,10 +27,10 @@ Parameters:
       Amazon Linux 2023, arm64, kernel 6.1 (us-east-1). Would ideally resolve dynamically
       via the /aws/service/ami-amazon-linux-2023/al2023-ami-kernel-default-arm64 SSM
       public parameter instead of a fixed id, but this account's org-level guardrails
-      block ssm:GetParameter on the whole /aws/ public-parameter namespace (confirmed:
-      even an AdministratorAccess principal gets AccessDeniedException — "No access to
-      /aws/ namespace" — this isn't an IAM policy gap in this template, it's outside its
-      control). Refresh periodically with:
+      block ssm:GetParameter on the whole /aws/ public-parameter namespace. Confirmed:
+      even an AdministratorAccess principal gets AccessDeniedException, "No access to
+      /aws/ namespace". Not an IAM policy gap in this template; outside its control.
+      Refresh periodically with:
         aws ec2 describe-images --owners amazon \
           --filters 'Name=name,Values=al2023-ami-2023.*-kernel-6.1-arm64' 'Name=state,Values=available' \
           --query 'reverse(sort_by(Images, &CreationDate))[:1].[ImageId,Name]' --output table
@@ -88,10 +88,10 @@ Resources:
       SubnetId: !Ref PublicSubnet
       RouteTableId: !Ref PublicRouteTable
 
-  # Zero inbound rules — this bot only ever makes outbound connections (Discord gateway +
-  # voice, YouTube, Anthropic). SSM Session Manager/Run Command reach the instance without
-  # any inbound rule at all (the SSM agent initiates outbound-only). Outbound is the
-  # implicit default AWS applies when SecurityGroupEgress isn't specified.
+  # Zero inbound rules: this bot only ever makes outbound connections (Discord gateway
+  # and voice, YouTube, Anthropic). SSM Session Manager/Run Command reach the instance
+  # without any inbound rule at all (the SSM agent initiates outbound-only). Outbound is
+  # the implicit default AWS applies when SecurityGroupEgress isn't specified.
   InstanceSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -115,8 +115,8 @@ Resources:
 
   # Persists /radio's saved artist list (data/radio-artists.json) across an ASG-driven
   # instance replacement, which a fresh local EBS root volume never would. Mounted at the
-  # same host path docker-compose.yml already expects (./data:/app/data) — no app or
-  # compose changes needed. Usage-based cost, no flat monthly minimum, at this data size
+  # same host path docker-compose.yml already expects (./data:/app/data); no app or
+  # compose changes needed. Usage-based cost, no flat monthly minimum; at this data size
   # (a few KB) it's effectively free.
   FileSystem:
     Type: AWS::EFS::FileSystem
@@ -140,7 +140,7 @@ Resources:
       RetentionInDays: 14
 
   # Fixed name (not auto-generated) so infra/oidc.yaml's CfnServiceRole can reference this
-  # role's ARN by construction, without a cross-stack export — oidc.yaml is deployed
+  # role's ARN by construction, without a cross-stack export: oidc.yaml is deployed
   # first, before this role exists.
   InstanceRole:
     Type: AWS::IAM::Role
@@ -204,8 +204,18 @@ Resources:
             AssociatePublicIpAddress: true
             Groups:
               - !Ref InstanceSecurityGroup
+        # IMDSv2-only (HttpTokens required, the standard hardening against SSRF-driven
+        # credential theft), with a hop limit of 1 so only the host process can reach the
+        # metadata endpoint, not any of the four Docker containers a hop further away.
+        # This app's own README documents yt-dlp's generic extractor as a real SSRF
+        # vector (see the internal API's YOUTUBE_URL_RE check); this closes off the cloud
+        # metadata endpoint as a target even if that validation were ever bypassed.
+        MetadataOptions:
+          HttpTokens: required
+          HttpPutResponseHopLimit: 1
+          HttpEndpoint: enabled
         # See infra/userdata.sh for the readable, shellcheck-able copy of this exact
-        # script — the two must be kept in sync (CloudFormation has no file-include
+        # script. The two must be kept in sync (CloudFormation has no file-include
         # mechanism, so the real, deployed copy has to live inline here).
         UserData:
           Fn::Base64: !Sub |
@@ -223,14 +233,25 @@ Resources:
             systemctl enable --now docker
 
             mkdir -p /usr/libexec/docker/cli-plugins
-            curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" \
-              -o /usr/libexec/docker/cli-plugins/docker-compose
+            COMPOSE_ARCH=$(uname -m)
+            cd /tmp
+            curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$COMPOSE_ARCH" \
+              -o "docker-compose-linux-$COMPOSE_ARCH"
+            curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$COMPOSE_ARCH.sha256" \
+              | sha256sum -c -
+            mv "docker-compose-linux-$COMPOSE_ARCH" /usr/libexec/docker/cli-plugins/docker-compose
             chmod +x /usr/libexec/docker/cli-plugins/docker-compose
 
             BUILDX_VERSION=$(curl -fsSL https://api.github.com/repos/docker/buildx/releases/latest | grep -m1 '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')
             curl -fsSL "https://github.com/docker/buildx/releases/download/v$BUILDX_VERSION/buildx-v$BUILDX_VERSION.linux-arm64" \
-              -o /usr/libexec/docker/cli-plugins/docker-buildx
+              -o "buildx-v$BUILDX_VERSION.linux-arm64"
+            curl -fsSL "https://github.com/docker/buildx/releases/download/v$BUILDX_VERSION/checksums.txt" \
+              | grep -E "\*buildx-v$BUILDX_VERSION\.linux-arm64$" | sha256sum -c -
+            mv "buildx-v$BUILDX_VERSION.linux-arm64" /usr/libexec/docker/cli-plugins/docker-buildx
             chmod +x /usr/libexec/docker/cli-plugins/docker-buildx
+            cd /
+
+            set +x
 
             SECRET_JSON=$(aws secretsmanager get-secret-value --region "$REGION" --secret-id "$SECRET_ARN" --query SecretString --output text)
             GITHUB_TOKEN=$(echo "$SECRET_JSON" | jq -r .GITHUB_TOKEN)
@@ -255,11 +276,14 @@ Resources:
             AWS_REGION=$REGION
             LOG_GROUP=${LogGroup}
             ENVEOF
+            chmod 600 .env
+
+            set -x
 
             docker compose -f docker-compose.yml -f infra/docker-compose.prod.yml up -d
 
   # min=max=desired=1: the actual self-healing mechanism. AWS replaces the instance
-  # automatically on an EC2 status-check failure — no extra automation code to write, and
+  # automatically on an EC2 status-check failure, no extra automation code to write, and
   # no ALB/EIP/NAT needed since nothing inbound ever reaches this box regardless of which
   # instance is currently running.
   AutoScalingGroup:
@@ -277,7 +301,7 @@ Resources:
       HealthCheckType: EC2
       HealthCheckGracePeriod: 300
       Tags:
-        # Propagated to every instance the ASG launches — this is what
+        # Propagated to every instance the ASG launches. This is what
         # infra/oidc.yaml's AppDeployRole's ssm:resourceTag/Name condition matches, so
         # SendCommand keeps working across any future instance replacement without the
         # IAM policy ever needing to know a specific instance id.
