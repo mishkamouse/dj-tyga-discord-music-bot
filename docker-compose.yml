@@ -1,0 +1,28 @@
+services:
+  bot:
+    build: .
+    env_file: .env
+    environment:
+      # Talk to sidecars over the compose network instead of localhost.
+      YTDLP_POT_PROVIDER_URL: http://pot-provider:4416
+      STRANDS_AGENT_URL: http://strands-agent:8000
+    depends_on:
+      - pot-provider
+      - strands-agent
+    restart: unless-stopped
+
+  # Generates YouTube PO tokens automatically (BotGuard attestation) so yt-dlp extraction
+  # works from this box without any manual cookie export. See the design doc.
+  pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    restart: unless-stopped
+
+  # Natural-language queue control (/ask). Its tools only reach the bot's internal API
+  # (queue read/add/remove/etc, scoped per guild) over the compose network — neither this
+  # service nor the bot's internal API port is published to the host.
+  strands-agent:
+    build: ./agent
+    env_file: .env
+    environment:
+      BOT_INTERNAL_API_URL: http://bot:8100
+    restart: unless-stopped

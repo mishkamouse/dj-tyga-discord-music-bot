@@ -1,0 +1,4 @@
+strands-agents[anthropic]
+fastapi
+uvicorn[standard]
+httpx
