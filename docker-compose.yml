@@ -5,6 +5,7 @@ services:
     environment:
       # Talk to sidecars over the compose network instead of localhost.
       YTDLP_POT_PROVIDER_URL: http://pot-provider:4416
+      YTDLP_PROXY_URL: socks5://warp:1080
       STRANDS_AGENT_URL: http://strands-agent:8000
     volumes:
       # Persists the /radio artist rotation (data/radio-artists.json) across restarts and
@@ -13,6 +14,7 @@ services:
     depends_on:
       - pot-provider
       - strands-agent
+      - warp
     restart: unless-stopped
 
   # Generates YouTube PO tokens automatically (BotGuard attestation) so yt-dlp extraction
@@ -20,6 +22,19 @@ services:
   pot-provider:
     image: brainicism/bgutil-ytdlp-pot-provider:latest
     restart: unless-stopped
+
+  # Routes yt-dlp's requests through Cloudflare's network (free consumer WARP — fully
+  # automatic device registration, no manual login/token) instead of this box's own IP.
+  # Needed because YouTube blocks known cloud/datacenter IP ranges (AWS, GCP, Azure, ...)
+  # at the IP-reputation level, before PO tokens or player-client selection are even
+  # evaluated — confirmed live against this exact deployment, see "Why yt-dlp needs a proxy
+  # on cloud hosts" in the README. warp-data persists WARP's device registration across
+  # restarts so it isn't re-registered (and rate-limited) every time.
+  warp:
+    image: dublok/cloudflare-warp:latest
+    restart: unless-stopped
+    volumes:
+      - warp-data:/var/lib/cloudflare-warp
 
   # Natural-language queue control (/ask). Its tools only reach the bot's internal API
   # (queue read/add/remove/etc, scoped per guild) over the compose network — neither this
@@ -30,3 +45,6 @@ services:
     environment:
       BOT_INTERNAL_API_URL: http://bot:8100
     restart: unless-stopped
+
+volumes:
+  warp-data:

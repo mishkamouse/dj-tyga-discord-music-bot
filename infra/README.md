@@ -1,7 +1,7 @@
 # Deploying DJ Tyga to AWS
 
 A single self-healing EC2 instance (Auto Scaling Group pinned at `min=max=desired=1`)
-running the exact same three-container Docker Compose stack as local dev. No inbound
+running the exact same four-container Docker Compose stack as local dev. No inbound
 network access at all — the bot only ever makes outbound connections (Discord, YouTube,
 Anthropic), so there's nothing to expose. Everything here assumes you already have an AWS
 account and the AWS CLI configured locally (`aws configure` or SSO) for the one-time,
@@ -85,7 +85,7 @@ aws cloudformation deploy \
 
 Takes a few minutes — the ASG has to launch the instance, which then runs the full boot
 script (installs Docker, clones the repo, mounts EFS, pulls the secret, builds and starts
-all three containers).
+all four containers).
 
 ## 5. Verify
 
@@ -104,7 +104,7 @@ aws ssm start-session --target "$INSTANCE_ID"
 cd /opt/dj-tyga && docker compose ps
 ```
 
-All three containers should show healthy, and the bot should come online in Discord.
+All four containers should show healthy, and the bot should come online in Discord.
 Confirm voice playback works end-to-end from the instance itself — the one genuinely new
 behavioral unknown moving off local dev (EC2's normal bridge networking should handle
 Discord's voice UDP fine; if it doesn't, add `network_mode: host` per service to

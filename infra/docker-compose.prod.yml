@@ -27,3 +27,11 @@ services:
         awslogs-region: "${AWS_REGION}"
         awslogs-group: "${LOG_GROUP}"
         awslogs-stream: strands-agent
+
+  warp:
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: "${AWS_REGION}"
+        awslogs-group: "${LOG_GROUP}"
+        awslogs-stream: warp

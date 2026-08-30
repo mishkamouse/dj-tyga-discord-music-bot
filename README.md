@@ -112,15 +112,19 @@ flowchart TD
     Bot -->|"/ask queries"| Agent
     Agent -->|"tool calls, via internal API"| Bot
     Bot -->|PO token requests| Pot
+    Bot -->|"yt-dlp traffic (cloud hosts only)"| Warp
 
     Agent["<b>strands-agent</b> — Python / FastAPI<br/>Strands Agents SDK · powers /ask<br/>(and can edit the radio list, but never starts radio or touches voice)"]
     Agent -->|model calls| LLM[("Anthropic API<br/>or Bedrock / Ollama")]
 
     Pot["<b>pot-provider</b><br/>runs BotGuard attestation itself,<br/>serves fresh YouTube anti-bot tokens"]
+    Warp["<b>warp</b><br/>Cloudflare WARP — routes around YouTube's<br/>datacenter-IP blocks, automatic, no login"]
+    Warp -->|WireGuard| Cloudflare[("Cloudflare network")]
 ```
 
-Three containers, always running together. Every internal port (the bot's own API, the
-agent's API, the pot-provider) is compose-internal only — nothing but Discord and (if
+Four containers, always running together. Every internal port (the bot's own API, the
+agent's API, the pot-provider, the WARP proxy) is compose-internal only — nothing but
+Discord, Cloudflare, and (if
 configured) Anthropic's API is ever reachable from outside.
 
 **A single track, end to end:** `/play` resolves the query via `yt-dlp` (with an
@@ -161,6 +165,19 @@ confirm you're not a bot." The `pot-provider` sidecar runs the actual BotGuard
 attestation itself and serves fresh tokens over a local API that `yt-dlp` calls
 automatically. This is the standard, actively-maintained way bots solve this today —
 **no browser cookie export, ever**, on this box or in production.
+
+**Why yt-dlp also needs a proxy on cloud hosts:** a valid PO token isn't actually enough
+once you're running on a well-known cloud IP range (AWS, GCP, Azure, ...) — YouTube blocks
+those at the IP-reputation level, before PO tokens or player-client selection are even
+evaluated. Confirmed directly against this project's own AWS deployment: even a bare,
+unauthenticated metadata search failed with "Sign in to confirm you're not a bot" from an
+AWS IP, regardless of player client (`tv`, `android_vr`, or the default all failed
+identically) — this genuinely isn't a token or client problem on cloud hosts, it's the
+network path. The `warp` sidecar routes `yt-dlp`'s traffic through Cloudflare's free
+consumer WARP instead (`dublok/cloudflare-warp`) — device registration is fully automatic,
+no login or manual step, same as `pot-provider`. `YTDLP_PROXY_URL` controls it (blank on a
+residential dev machine, where this normally isn't needed at all; `socks5://warp:1080` in
+docker-compose).
 
 **Why the voice connection needs `@discordjs/voice` 0.19+:** Discord enforces its DAVE
 end-to-end-encryption protocol on all voice calls now; an older client's connection gets
@@ -261,6 +278,7 @@ All variables live in `.env` (copy from `.env.example`). Grouped by what they af
 | `YTDLP_PATH` | Path to the `yt-dlp` binary. Default `yt-dlp`. |
 | `YTDLP_POT_PROVIDER_URL` | Where `pot-provider` is reachable. Compose overrides this automatically. |
 | `YTDLP_PLAYER_CLIENTS` | Leave blank — let yt-dlp choose Innertube clients itself. See [Troubleshooting](#troubleshooting--operational-notes). |
+| `YTDLP_PROXY_URL` | Routes yt-dlp through a proxy — needed on cloud hosts (see [Troubleshooting](#troubleshooting--operational-notes)). Compose overrides this to the `warp` sidecar automatically; leave blank on a residential dev machine. |
 | `QUEUE_IDLE_TIMEOUT_MS` | How long an empty queue waits before the bot leaves voice. Default 5 minutes. |
 | `ALONE_TIMEOUT_MS` | In 24/7 mode (`/247`), how long the bot tolerates an empty channel before giving up anyway. Default 1 hour. |
 | `RADIO_STORE_PATH` | Where the `/radio` artist rotation is persisted. Default `data/radio-artists.json`; Docker Compose mounts `./data` as a volume so this survives rebuilds. |
@@ -345,12 +363,17 @@ about AWS at all.
   broke extraction — YouTube had made `tv` return UNPLAYABLE and `web` SABR-only (no
   direct URL) for some videos, while yt-dlp's own default client selection worked fine.
   Leave it blank and let yt-dlp choose.
-- **Datacenter IPs (including AWS) get YouTube's bot-detection challenge far more than
-  home connections.** The `pot-provider` sidecar handles this automatically — there
-  should never be a need to manually export browser cookies. If extraction still fails
-  after updating both packages, see the yt-dlp
-  [PO Token Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide) for the current
-  state of the arms race.
+- **Datacenter IPs (including AWS) get blocked outright, separately from the PO token
+  problem.** `pot-provider` alone isn't enough on a cloud host — confirmed directly against
+  this project's own AWS deployment, where even an unauthenticated metadata search failed
+  with "Sign in to confirm you're not a bot" regardless of player client. That's an
+  IP-reputation block, evaluated before tokens or clients matter at all, which is what the
+  `warp` sidecar (`YTDLP_PROXY_URL`) fixes — see "Why yt-dlp also needs a proxy on cloud
+  hosts" above. There should never be a need to manually export browser cookies for either
+  problem. If extraction still fails after updating both packages and confirming `warp` is
+  connected (`docker compose logs warp` should show `StatusChanged(Connected ...)`), see
+  the yt-dlp [PO Token Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide) for the
+  current state of the arms race.
 - **Rootless Podman + a custom bridge network wouldn't reach `ready` on the voice
   connection at all** (separate from the DAVE issue above) when this was first tested on
   Bazzite. Running both containers with `--network host` fixed that. This turned out not

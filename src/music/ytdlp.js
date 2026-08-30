@@ -10,6 +10,11 @@ const POT_PROVIDER_URL = process.env.YTDLP_POT_PROVIDER_URL || 'http://127.0.0.1
 // than we could, and hardcoding a fixed list (e.g. "tv,web") has empirically excluded
 // clients that were currently working. Set YTDLP_PLAYER_CLIENTS to override if ever needed.
 const PLAYER_CLIENTS = process.env.YTDLP_PLAYER_CLIENTS || '';
+// YouTube blocks known cloud/datacenter IP ranges at the IP-reputation level — before PO
+// tokens or player-client selection are even evaluated, so neither of those fix it alone.
+// Routes through the warp sidecar (Cloudflare's network) instead. Leave blank to disable
+// (e.g. a residential dev machine, where this normally isn't needed at all).
+const PROXY_URL = process.env.YTDLP_PROXY_URL || '';
 
 const BASE_ARGS = [
   '--no-warnings',
@@ -20,6 +25,7 @@ const BASE_ARGS = [
   // no manual cookie export, ever. See "How it works" in the README.
   '--extractor-args', `youtubepot-bgutilhttp:base_url=${POT_PROVIDER_URL}`,
   ...(PLAYER_CLIENTS ? ['--extractor-args', `youtube:player_client=${PLAYER_CLIENTS}`] : []),
+  ...(PROXY_URL ? ['--proxy', PROXY_URL] : []),
 ];
 
 async function runYtDlp(args) {

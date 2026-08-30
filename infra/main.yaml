@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   DJ Tyga's AWS runtime: a single self-healing EC2 instance (Auto Scaling Group pinned at
-  1) running the same three-container Docker Compose stack as local dev, with zero inbound
+  1) running the same four-container Docker Compose stack as local dev, with zero inbound
   network access (SSM only — see infra/README.md), a persisted /radio artist list on EFS,
   and container logs shipped to CloudWatch. Deploy infra/oidc.yaml first.
 
