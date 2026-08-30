@@ -38,12 +38,24 @@ CloudFormation's parameter history.
 This has to come first: the roles GitHub Actions will use don't exist yet, so the first
 deploy can't come from a workflow.
 
+The trust policy pins the exact, immutable GitHub owner and repo IDs (not just the
+name) per GitHub's OIDC subject-claim format, so a deleted-and-recreated repo under the
+same name can't inherit this trust relationship. Look them up once:
+
+```bash
+gh api users/<owner> --jq .id
+gh api repos/<owner>/<repo> --jq .id
+```
+
 ```bash
 aws cloudformation deploy \
   --stack-name dj-tyga-oidc \
   --template-file infra/oidc.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides GitHubOrgRepo=mishkamouse/dj-tyga-discord-music-bot
+  --parameter-overrides \
+    GitHubOrgRepo=mishkamouse/dj-tyga-discord-music-bot \
+    GitHubOwnerId=<owner id from above> \
+    GitHubRepoId=<repo id from above>
 ```
 
 Grab the three role ARNs and the CloudFormation service role ARN from the stack outputs:

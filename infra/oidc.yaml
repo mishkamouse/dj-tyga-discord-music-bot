@@ -10,6 +10,20 @@ Parameters:
   GitHubOrgRepo:
     Type: String
     Description: "GitHub 'org/repo' this trust policy is scoped to, e.g. mishkamouse/dj-tyga-discord-music-bot"
+  GitHubOwnerId:
+    Type: String
+    Description: >
+      Numeric, immutable GitHub user/org ID for the owner in GitHubOrgRepo. GitHub's OIDC
+      tokens now embed this alongside the name (repo:OWNER@OWNER-ID/REPO@REPO-ID:ref:...)
+      specifically so a deleted-and-recreated repo under the same name can't inherit an
+      old trust relationship; matching only the name would defeat that. Find it with:
+        gh api users/<owner> --jq .id
+  GitHubRepoId:
+    Type: String
+    Description: >
+      Numeric, immutable GitHub repository ID for the repo in GitHubOrgRepo. Same reason
+      as GitHubOwnerId above. Find it with:
+        gh api repos/<owner>/<repo> --jq .id
   StackName:
     Type: String
     Default: dj-tyga
@@ -108,6 +122,12 @@ Resources:
                   - ec2:DescribeTags
                   - ec2:DescribeAvailabilityZones
                   - ec2:DescribeAccountAttributes
+                  - ec2:DescribeImages
+                  # Not an actual instance launch. Required by the AutoScaling service
+                  # as a permission-check formality whenever an ASG is created or updated
+                  # to use a launch template. Real launches happen under the ASG's own
+                  # service-linked role, not this one.
+                  - ec2:RunInstances
                   - autoscaling:CreateAutoScalingGroup
                   - autoscaling:DeleteAutoScalingGroup
                   - autoscaling:UpdateAutoScalingGroup
@@ -193,12 +213,15 @@ Resources:
               "Action": "sts:AssumeRoleWithWebIdentity",
               "Condition": {
                 "StringEquals": {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com"},
-                "StringLike": {"token.actions.githubusercontent.com:sub": "repo:${Repo}:ref:refs/heads/main"}
+                "StringLike": {"token.actions.githubusercontent.com:sub": "repo:${Owner}@${OwnerId}/${RepoName}@${RepoId}:ref:refs/heads/main"}
               }
             }]
           }'
         - ProviderArn: !GetAtt GitHubOidcProvider.Arn
-          Repo: !Ref GitHubOrgRepo
+          Owner: !Select [0, !Split ['/', !Ref GitHubOrgRepo]]
+          RepoName: !Select [1, !Split ['/', !Ref GitHubOrgRepo]]
+          OwnerId: !Ref GitHubOwnerId
+          RepoId: !Ref GitHubRepoId
       Policies:
         - PolicyName: ssm-send-command-to-dj-tyga-only
           PolicyDocument:
@@ -240,12 +263,15 @@ Resources:
               "Action": "sts:AssumeRoleWithWebIdentity",
               "Condition": {
                 "StringEquals": {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com"},
-                "StringLike": {"token.actions.githubusercontent.com:sub": "repo:${Repo}:ref:refs/heads/main"}
+                "StringLike": {"token.actions.githubusercontent.com:sub": "repo:${Owner}@${OwnerId}/${RepoName}@${RepoId}:ref:refs/heads/main"}
               }
             }]
           }'
         - ProviderArn: !GetAtt GitHubOidcProvider.Arn
-          Repo: !Ref GitHubOrgRepo
+          Owner: !Select [0, !Split ['/', !Ref GitHubOrgRepo]]
+          RepoName: !Select [1, !Split ['/', !Ref GitHubOrgRepo]]
+          OwnerId: !Ref GitHubOwnerId
+          RepoId: !Ref GitHubRepoId
       Policies:
         - PolicyName: cloudformation-dj-tyga-stack-only
           PolicyDocument:
