@@ -1,0 +1,40 @@
+name: Deploy infra
+
+# Manual only (workflow_dispatch) — infra changes stay a deliberate, reviewed action
+# rather than firing on every push, unlike deploy-app.yml. Updates the dj-tyga
+# CloudFormation stack (infra/main.yaml) via a change set. Requires infra/oidc.yaml to
+# already be deployed by hand once, and these repo variables set (Settings → Secrets and
+# variables → Actions → Variables) — see infra/README.md for where each value comes from:
+#   AWS_REGION, AWS_INFRA_DEPLOY_ROLE_ARN, AWS_CFN_SERVICE_ROLE_ARN,
+#   DJ_TYGA_SECRET_ARN, DJ_TYGA_GITHUB_ORG_REPO
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_INFRA_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy the dj-tyga stack via a change set
+        run: |
+          set -euo pipefail
+          aws cloudformation deploy \
+            --stack-name dj-tyga \
+            --template-file infra/main.yaml \
+            --role-arn "${{ vars.AWS_CFN_SERVICE_ROLE_ARN }}" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              SecretArn="${{ vars.DJ_TYGA_SECRET_ARN }}" \
+              GitHubOrgRepo="${{ vars.DJ_TYGA_GITHUB_ORG_REPO }}"

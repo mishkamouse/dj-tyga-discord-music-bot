@@ -1,0 +1,29 @@
+# AWS-only override, applied on top of the root docker-compose.yml:
+#   docker compose -f docker-compose.yml -f infra/docker-compose.prod.yml up -d
+# (exactly what infra/userdata.sh runs on boot). Kept separate rather than added to the
+# root file so local Podman dev never has to care about AWS credentials/region just to
+# start the stack — this file is the only thing that does.
+services:
+  bot:
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: "${AWS_REGION}"
+        awslogs-group: "${LOG_GROUP}"
+        awslogs-stream: bot
+
+  pot-provider:
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: "${AWS_REGION}"
+        awslogs-group: "${LOG_GROUP}"
+        awslogs-stream: pot-provider
+
+  strands-agent:
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: "${AWS_REGION}"
+        awslogs-group: "${LOG_GROUP}"
+        awslogs-stream: strands-agent

@@ -1,0 +1,218 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Bootstrap stack for DJ Tyga's AWS deployment: a GitHub Actions OIDC provider plus three
+  narrowly-scoped roles (app-deploy, infra-deploy, and the CloudFormation service role
+  infra-deploy hands off to). Deploy this ONCE, by hand, before main.yaml — the workflows
+  that use these roles can't create the roles they need to run.
+  See infra/README.md for the exact deploy command.
+
+Parameters:
+  GitHubOrgRepo:
+    Type: String
+    Description: "GitHub 'org/repo' this trust policy is scoped to, e.g. mishkamouse/dj-tyga-discord-music-bot"
+  StackName:
+    Type: String
+    Default: dj-tyga
+    Description: Name of the main.yaml stack infra-deploy-role and the PassRole condition are scoped to.
+
+Resources:
+  # AWS's own trust store validates GitHub's OIDC provider now, not this thumbprint — the
+  # field is still required by the resource schema, so these are GitHub's two published
+  # intermediary-cert thumbprints (either can be returned; effectively a formality now,
+  # not the actual security boundary).
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  # Assumable only by CloudFormation itself (never directly by the GitHub Actions
+  # identity) — this is what actually creates/updates the VPC/EC2/EFS/IAM/logs resources
+  # in main.yaml. Keeping the broad create permissions here, and only handing
+  # InfraDeployRole the narrow ability to ask CloudFormation to assume it, means the CI
+  # identity itself never holds these permissions directly.
+  CfnServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dj-tyga-cfn-service-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: dj-tyga-stack-resources
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Most EC2/VPC "create network" actions don't support resource-level IAM
+              # restriction at all (a well-known AWS API limitation, not a choice made
+              # here) — blast radius is instead contained by this role only being
+              # assumable by CloudFormation, and only for the one dj-tyga stack (enforced
+              # by InfraDeployRole's PassRole condition below).
+              - Sid: Ec2NetworkAndCompute
+                Effect: Allow
+                Action:
+                  - ec2:*
+                  - autoscaling:*
+                  - elasticfilesystem:*
+                Resource: '*'
+              # First-ever ASG in this account needs its service-linked role created —
+              # scoped to exactly that one AWS-managed role, per AWS's own recommended
+              # pattern for granting this action.
+              - Sid: CreateAsgServiceLinkedRole
+                Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling'
+                Condition:
+                  StringEquals:
+                    iam:AWSServiceName: autoscaling.amazonaws.com
+              - Sid: LogsForThisApp
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:PutRetentionPolicy
+                  - logs:TagResource
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/dj-tyga/*'
+              # DescribeLogGroups is a list-style call — CloudFormation uses it to resolve
+              # AWS::Logs::LogGroup's Arn attribute (Fn::GetAtt), and like the EC2 actions
+              # above, it doesn't support resource-level scoping the way the mutating
+              # actions do.
+              - Sid: DescribeLogGroupsForGetAtt
+                Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: '*'
+              - Sid: IamForTheInstanceRoleOnly
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:TagRole
+                  - iam:CreateInstanceProfile
+                  - iam:DeleteInstanceProfile
+                  - iam:AddRoleToInstanceProfile
+                  - iam:RemoveRoleFromInstanceProfile
+                  - iam:GetInstanceProfile
+                  - iam:PassRole
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/dj-tyga-instance-role'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:instance-profile/dj-tyga-instance-profile'
+
+  AppDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dj-tyga-app-deploy-role
+      Description: "Used by .github/workflows/deploy-app.yml: pushes app code changes via SSM, nothing else."
+      AssumeRolePolicyDocument: !Sub
+        - '{
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Principal": {"Federated": "${ProviderArn}"},
+              "Action": "sts:AssumeRoleWithWebIdentity",
+              "Condition": {
+                "StringEquals": {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com"},
+                "StringLike": {"token.actions.githubusercontent.com:sub": "repo:${Repo}:ref:refs/heads/main"}
+              }
+            }]
+          }'
+        - ProviderArn: !GetAtt GitHubOidcProvider.Arn
+          Repo: !Ref GitHubOrgRepo
+      Policies:
+        - PolicyName: ssm-send-command-to-dj-tyga-only
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: SendCommandScopedByTag
+                Effect: Allow
+                Action: ssm:SendCommand
+                Resource:
+                  - !Sub 'arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*'
+                Condition:
+                  StringEquals:
+                    ssm:resourceTag/Name: dj-tyga
+              - Sid: SendCommandDocument
+                Effect: Allow
+                Action: ssm:SendCommand
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}::document/AWS-RunShellScript'
+              # Neither polling action supports resource-level permissions in the SSM API —
+              # accepted here since both are read-only (poll a command's result) and
+              # SendCommand above is what's actually access-controlled.
+              - Sid: PollCommandResult
+                Effect: Allow
+                Action:
+                  - ssm:GetCommandInvocation
+                  - ssm:ListCommandInvocations
+                Resource: '*'
+
+  InfraDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dj-tyga-infra-deploy-role
+      Description: "Used by .github/workflows/deploy-infra.yml: updates the dj-tyga CloudFormation stack only, via change sets."
+      AssumeRolePolicyDocument: !Sub
+        - '{
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Principal": {"Federated": "${ProviderArn}"},
+              "Action": "sts:AssumeRoleWithWebIdentity",
+              "Condition": {
+                "StringEquals": {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com"},
+                "StringLike": {"token.actions.githubusercontent.com:sub": "repo:${Repo}:ref:refs/heads/main"}
+              }
+            }]
+          }'
+        - ProviderArn: !GetAtt GitHubOidcProvider.Arn
+          Repo: !Ref GitHubOrgRepo
+      Policies:
+        - PolicyName: cloudformation-dj-tyga-stack-only
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: StackLifecycle
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:GetTemplate
+                Resource: !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${StackName}/*'
+              - Sid: HandOffToCfnServiceRoleOnly
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CfnServiceRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: cloudformation.amazonaws.com
+
+Outputs:
+  OidcProviderArn:
+    Value: !GetAtt GitHubOidcProvider.Arn
+  AppDeployRoleArn:
+    Value: !GetAtt AppDeployRole.Arn
+    Description: Set as the AWS_APP_DEPLOY_ROLE_ARN repo variable for deploy-app.yml.
+  InfraDeployRoleArn:
+    Value: !GetAtt InfraDeployRole.Arn
+    Description: Set as the AWS_INFRA_DEPLOY_ROLE_ARN repo variable for deploy-infra.yml.
+  CfnServiceRoleArn:
+    Value: !GetAtt CfnServiceRole.Arn
+    Description: Passed as --role-arn when deploying main.yaml (by hand or from deploy-infra.yml).

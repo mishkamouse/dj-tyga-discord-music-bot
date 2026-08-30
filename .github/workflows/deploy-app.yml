@@ -1,0 +1,54 @@
+name: Deploy app
+
+# Auto-deploys app code changes to the live dj-tyga EC2 instance via SSM Run Command — no
+# SSH, no stored AWS keys (OIDC → infra/oidc.yaml's AppDeployRole). Infra changes
+# (infra/**) are handled by deploy-infra.yml instead, and stay a deliberate, manually
+# triggered action rather than firing on every push. See infra/README.md.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'infra/**'
+      - '.github/workflows/deploy-infra.yml'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_APP_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Pull latest code and redeploy the stack on the instance
+        run: |
+          set -euo pipefail
+
+          COMMAND_ID=$(aws ssm send-command \
+            --targets "Key=tag:Name,Values=dj-tyga" \
+            --document-name "AWS-RunShellScript" \
+            --parameters commands='["cd /opt/dj-tyga && git pull && docker compose -f docker-compose.yml -f infra/docker-compose.prod.yml up -d --build --remove-orphans"]' \
+            --query "Command.CommandId" --output text)
+          echo "Command ID: $COMMAND_ID"
+
+          for _ in $(seq 1 30); do
+            STATUS=$(aws ssm list-command-invocations --command-id "$COMMAND_ID" --details \
+              --query "CommandInvocations[0].Status" --output text 2>/dev/null || echo "Pending")
+            echo "Status: $STATUS"
+            case "$STATUS" in
+              Success) exit 0 ;;
+              Failed|Cancelled|TimedOut)
+                aws ssm list-command-invocations --command-id "$COMMAND_ID" --details \
+                  --query "CommandInvocations[0].CommandPlugins[0].[Output]" --output text
+                exit 1
+                ;;
+            esac
+            sleep 10
+          done
+          echo "Timed out waiting for the deploy command to finish."
+          exit 1

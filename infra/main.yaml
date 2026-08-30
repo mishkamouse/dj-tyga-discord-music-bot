@@ -1,0 +1,291 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  DJ Tyga's AWS runtime: a single self-healing EC2 instance (Auto Scaling Group pinned at
+  1) running the same three-container Docker Compose stack as local dev, with zero inbound
+  network access (SSM only — see infra/README.md), a persisted /radio artist list on EFS,
+  and container logs shipped to CloudWatch. Deploy infra/oidc.yaml first.
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t4g.small
+    Description: Graviton (arm64) by default — every image in this repo is multi-arch.
+  SecretArn:
+    Type: String
+    Description: >
+      ARN of the Secrets Manager secret holding DISCORD_TOKEN, DISCORD_CLIENT_ID,
+      ANTHROPIC_API_KEY, and GITHUB_TOKEN (see infra/README.md for the exact JSON shape).
+      Created once by hand, out-of-band — never a resource in this template, so its
+      plaintext never lands in a CloudFormation template or parameter history.
+  GitHubOrgRepo:
+    Type: String
+    Description: "'org/repo' to clone at boot, e.g. mishkamouse/dj-tyga-discord-music-bot"
+  AmiId:
+    Type: AWS::EC2::Image::Id
+    Default: ami-068e33c5263812a9b
+    Description: >
+      Amazon Linux 2023, arm64, kernel 6.1 (us-east-1). Would ideally resolve dynamically
+      via the /aws/service/ami-amazon-linux-2023/al2023-ami-kernel-default-arm64 SSM
+      public parameter instead of a fixed id, but this account's org-level guardrails
+      block ssm:GetParameter on the whole /aws/ public-parameter namespace (confirmed:
+      even an AdministratorAccess principal gets AccessDeniedException — "No access to
+      /aws/ namespace" — this isn't an IAM policy gap in this template, it's outside its
+      control). Refresh periodically with:
+        aws ec2 describe-images --owners amazon \
+          --filters 'Name=name,Values=al2023-ami-2023.*-kernel-6.1-arm64' 'Name=state,Values=available' \
+          --query 'reverse(sort_by(Images, &CreationDate))[:1].[ImageId,Name]' --output table
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - { Key: Name, Value: dj-tyga }
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - { Key: Name, Value: dj-tyga-public }
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - { Key: Name, Value: dj-tyga }
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - { Key: Name, Value: dj-tyga-public }
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # Zero inbound rules — this bot only ever makes outbound connections (Discord gateway +
+  # voice, YouTube, Anthropic). SSM Session Manager/Run Command reach the instance without
+  # any inbound rule at all (the SSM agent initiates outbound-only). Outbound is the
+  # implicit default AWS applies when SecurityGroupEgress isn't specified.
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "dj-tyga instance: no inbound rules by design"
+      VpcId: !Ref Vpc
+      Tags:
+        - { Key: Name, Value: dj-tyga-instance }
+
+  EfsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "dj-tyga EFS mount target: NFS from the instance only"
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref InstanceSecurityGroup
+      Tags:
+        - { Key: Name, Value: dj-tyga-efs }
+
+  # Persists /radio's saved artist list (data/radio-artists.json) across an ASG-driven
+  # instance replacement, which a fresh local EBS root volume never would. Mounted at the
+  # same host path docker-compose.yml already expects (./data:/app/data) — no app or
+  # compose changes needed. Usage-based cost, no flat monthly minimum, at this data size
+  # (a few KB) it's effectively free.
+  FileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      FileSystemTags:
+        - { Key: Name, Value: dj-tyga-data }
+
+  MountTarget:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Ref PublicSubnet
+      SecurityGroups:
+        - !Ref EfsSecurityGroup
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /dj-tyga/app
+      RetentionInDays: 14
+
+  # Fixed name (not auto-generated) so infra/oidc.yaml's CfnServiceRole can reference this
+  # role's ARN by construction, without a cross-stack export — oidc.yaml is deployed
+  # first, before this role exists.
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dj-tyga-instance-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: dj-tyga-secret-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref SecretArn
+        - PolicyName: dj-tyga-logs-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: !GetAtt LogGroup.Arn
+        - PolicyName: dj-tyga-efs-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - elasticfilesystem:ClientMount
+                  - elasticfilesystem:ClientWrite
+                Resource: !GetAtt FileSystem.Arn
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: dj-tyga-instance-profile
+      Roles:
+        - !Ref InstanceRole
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: dj-tyga
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt InstanceProfile.Arn
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true
+            Groups:
+              - !Ref InstanceSecurityGroup
+        # See infra/userdata.sh for the readable, shellcheck-able copy of this exact
+        # script — the two must be kept in sync (CloudFormation has no file-include
+        # mechanism, so the real, deployed copy has to live inline here).
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -euxo pipefail
+
+            REGION="${AWS::Region}"
+            SECRET_ARN="${SecretArn}"
+            GITHUB_REPO="${GitHubOrgRepo}"
+            EFS_ID="${FileSystem}"
+            REPO_DIR=/opt/dj-tyga
+
+            dnf update -y
+            dnf install -y docker git jq amazon-efs-utils
+            systemctl enable --now docker
+
+            mkdir -p /usr/libexec/docker/cli-plugins
+            curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" \
+              -o /usr/libexec/docker/cli-plugins/docker-compose
+            chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+
+            SECRET_JSON=$(aws secretsmanager get-secret-value --region "$REGION" --secret-id "$SECRET_ARN" --query SecretString --output text)
+            GITHUB_TOKEN=$(echo "$SECRET_JSON" | jq -r .GITHUB_TOKEN)
+
+            if [ ! -d "$REPO_DIR/.git" ]; then
+              git clone "https://x-access-token:$GITHUB_TOKEN@github.com/$GITHUB_REPO.git" "$REPO_DIR"
+            fi
+            cd "$REPO_DIR"
+
+            mkdir -p "$REPO_DIR/data"
+            grep -q "$REPO_DIR/data" /etc/fstab || echo "$EFS_ID:/ $REPO_DIR/data efs _netdev,tls,iam 0 0" >> /etc/fstab
+            mount "$REPO_DIR/data"
+
+            echo "$SECRET_JSON" | jq -r 'to_entries | map(select(.key != "GITHUB_TOKEN")) | .[] | "\(.key)=\(.value)"' > .env
+            cat >> .env << ENVEOF
+            YTDLP_PATH=yt-dlp
+            QUEUE_IDLE_TIMEOUT_MS=300000
+            ALONE_TIMEOUT_MS=3600000
+            STRANDS_MODEL_PROVIDER=anthropic
+            STRANDS_MODEL_ID=claude-haiku-4-5-20251001
+            RADIO_DEFAULT_QUERY=Kanye West
+            AWS_REGION=$REGION
+            LOG_GROUP=${LogGroup}
+            ENVEOF
+
+            docker compose -f docker-compose.yml -f infra/docker-compose.prod.yml up -d
+
+  # min=max=desired=1: the actual self-healing mechanism. AWS replaces the instance
+  # automatically on an EC2 status-check failure — no extra automation code to write, and
+  # no ALB/EIP/NAT needed since nothing inbound ever reaches this box regardless of which
+  # instance is currently running.
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: dj-tyga
+      MinSize: '1'
+      MaxSize: '1'
+      DesiredCapacity: '1'
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 300
+      Tags:
+        # Propagated to every instance the ASG launches — this is what
+        # infra/oidc.yaml's AppDeployRole's ssm:resourceTag/Name condition matches, so
+        # SendCommand keeps working across any future instance replacement without the
+        # IAM policy ever needing to know a specific instance id.
+        - Key: Name
+          Value: dj-tyga
+          PropagateAtLaunch: true
+
+Outputs:
+  FileSystemId:
+    Value: !Ref FileSystem
+  LogGroupName:
+    Value: !Ref LogGroup
+  InstanceRoleArn:
+    Value: !GetAtt InstanceRole.Arn
+  InstanceSecurityGroupId:
+    Value: !Ref InstanceSecurityGroup
