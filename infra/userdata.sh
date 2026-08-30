@@ -22,8 +22,9 @@ EFS_ID="${FileSystem}"
 REPO_DIR=/opt/dj-tyga
 
 dnf update -y
-dnf install -y docker git jq amazon-efs-utils
+dnf install -y docker git jq amazon-efs-utils cronie
 systemctl enable --now docker
+systemctl enable --now crond
 
 # Downloaded and made executable as root-owned CLI plugins, verified against each
 # release's published checksums first so a compromised or tampered GitHub release (or any
@@ -100,5 +101,8 @@ ENVEOF
 chmod 600 .env
 
 set -x
+
+chmod +x infra/rotate-warp.sh
+echo "0 */6 * * * root $REPO_DIR/infra/rotate-warp.sh >> /var/log/dj-tyga-warp-rotate.log 2>&1" > /etc/cron.d/dj-tyga-warp-rotate
 
 docker compose -f docker-compose.yml -f infra/docker-compose.prod.yml up -d

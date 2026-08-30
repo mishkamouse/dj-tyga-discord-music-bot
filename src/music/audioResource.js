@@ -16,28 +16,41 @@ const ffmpegEnv = PROXY_URL ? { ...process.env, http_proxy: PROXY_URL, https_pro
 
 const CHUNK_SIZE = 1024 * 1024; // 1MiB — comfortably under YouTube's ~10MiB throttle trigger
 
-// googlevideo.com throttles bandwidth hard on a single continuous unranged request
-// (confirmed live: a plain fetch of a 3.4MB file ran at ~32KB/s, at or below real-time
-// playback rate; the same file fetched in 1MB Range chunks finished in 150ms at
-// ~22MB/s). This is the same behavior yt-dlp's own downloader avoids via
-// --http-chunk-size; this bot bypasses that entirely since it fetches the resolved URL
-// directly rather than going through yt-dlp's downloader. Fetching in ranged chunks
-// here avoids it the same way.
+const MAX_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 500;
+
+// googlevideo.com throttles bandwidth hard on a single continuous unranged request; this
+// fetches in ranged chunks to avoid it (same reason yt-dlp's downloader uses
+// --http-chunk-size). A 403 means the proxy identity is likely reputation-flagged, so
+// retrying it is pointless and fails fast; anything else gets a couple of quick retries.
+async function fetchChunk(url, offset) {
+  for (let attempt = 1; ; attempt++) {
+    let response;
+    try {
+      response = await fetch(url, {
+        ...(proxyAgent ? { dispatcher: proxyAgent } : {}),
+        headers: { Range: `bytes=${offset}-${offset + CHUNK_SIZE - 1}` },
+      });
+    } catch (err) {
+      if (attempt >= MAX_ATTEMPTS) throw err;
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+      continue;
+    }
+    if (response.status === 403) throw new Error('Failed to fetch audio stream (HTTP 403)');
+    if (response.ok && response.body) return Buffer.from(await response.arrayBuffer());
+    if (attempt >= MAX_ATTEMPTS) throw new Error(`Failed to fetch audio stream (HTTP ${response.status})`);
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+  }
+}
+
 async function* fetchChunked(url) {
   let offset = 0;
   while (true) {
-    const response = await fetch(url, {
-      ...(proxyAgent ? { dispatcher: proxyAgent } : {}),
-      headers: { Range: `bytes=${offset}-${offset + CHUNK_SIZE - 1}` },
-    });
-    if (!response.ok || !response.body) {
-      throw new Error(`Failed to fetch audio stream (HTTP ${response.status})`);
-    }
-    const buf = Buffer.from(await response.arrayBuffer());
+    const buf = await fetchChunk(url, offset);
     if (buf.length === 0) return;
     yield buf;
     offset += buf.length;
-    if (buf.length < CHUNK_SIZE) return; // short chunk means we just read the last one
+    if (buf.length < CHUNK_SIZE) return;
   }
 }
 

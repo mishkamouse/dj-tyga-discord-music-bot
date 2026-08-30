@@ -229,8 +229,9 @@ Resources:
             REPO_DIR=/opt/dj-tyga
 
             dnf update -y
-            dnf install -y docker git jq amazon-efs-utils
+            dnf install -y docker git jq amazon-efs-utils cronie
             systemctl enable --now docker
+            systemctl enable --now crond
 
             mkdir -p /usr/libexec/docker/cli-plugins
             COMPOSE_ARCH=$(uname -m)
@@ -279,6 +280,9 @@ Resources:
             chmod 600 .env
 
             set -x
+
+            chmod +x infra/rotate-warp.sh
+            echo "0 */6 * * * root $REPO_DIR/infra/rotate-warp.sh >> /var/log/dj-tyga-warp-rotate.log 2>&1" > /etc/cron.d/dj-tyga-warp-rotate
 
             docker compose -f docker-compose.yml -f infra/docker-compose.prod.yml up -d
 
