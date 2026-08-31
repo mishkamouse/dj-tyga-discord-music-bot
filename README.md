@@ -113,9 +113,9 @@ flowchart TD
     Warp -->|WireGuard| Cloudflare[("Cloudflare network")]
 ```
 
-Four containers, always running together. Every internal port is compose-internal only.
-Nothing but Discord, Cloudflare, and (if configured) Anthropic's API is reachable from
-outside.
+Three containers always running, plus `warp`, which is optional (on by default). Every
+internal port is compose-internal only. Nothing but Discord, Cloudflare (if `warp` is
+enabled), and (if configured) Anthropic's API is reachable from outside.
 
 **A single track, end to end.** `/play` resolves the query via `yt-dlp`, joins the voice
 channel, and hands YouTube's audio to Discord. Most audio is already Opus in a WebM
@@ -138,9 +138,30 @@ so the "Added to queue" card shows a real duration right away. Bulk results (rad
 until the track is about to play, at which point `getStreamInfo` resolves it anyway (and
 one track ahead, via prefetch) and backfills duration for free.
 
-**Playing reliably from a server.** `pot-provider` and `warp` are two small sidecars that
-keep playback working smoothly when this runs somewhere other than a home network. Neither
-needs any setup; Docker Compose wires them up automatically.
+**Playing reliably from a server.** `pot-provider` solves YouTube's PO-token challenge and
+should always run; there's no reason to disable it. `warp` is different: it's an optional,
+best-effort attempt to get around YouTube blocking cloud-provider IP ranges, by tunneling
+out through Cloudflare's network instead of the host's own. It helps, but Cloudflare's free
+WARP IPs are a shared pool used by lots of people running exactly this kind of automated
+traffic, and the pool's reputation degrades under sustained use — so under heavy load it can
+stop helping entirely, and no amount of retrying or reconnecting fixes that. **If you have a
+real residential IP** (running this on a home connection) **or a paid residential/static
+proxy, that's more reliable than `warp` and worth using instead.**
+
+**Enabling/disabling `warp`.** On by default: `docker compose up` starts all four
+containers. To run without it instead:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.no-warp.yml up --build --no-deps bot pot-provider strands-agent
+```
+
+`docker-compose.no-warp.yml` points `YTDLP_PROXY_URL`/`AUDIO_PROXY_URL` at whatever you've
+set in `.env` (blank by default, meaning talk to YouTube directly — the right choice on a
+residential connection, or set them to your own proxy's address first). `--no-deps` matters:
+Compose merges `depends_on` across files rather than letting an override remove entries from
+it, so without `--no-deps`, `warp` starts anyway as a declared dependency of `bot` even with
+the override applied and even naming services explicitly — `--no-deps` is what actually
+stops Compose from resolving and starting it.
 
 **Why the voice connection needs `@discordjs/voice` 0.19+.** Discord enforces its DAVE
 end-to-end encryption on all voice calls now. An older client's connection closes silently
@@ -232,8 +253,8 @@ All variables live in `.env` (copy from `.env.example`).
 | `YTDLP_PATH` | Path to the `yt-dlp` binary. Default `yt-dlp`. |
 | `YTDLP_POT_PROVIDER_URL` | Where `pot-provider` is reachable. Compose overrides this automatically. |
 | `YTDLP_PLAYER_CLIENTS` | Leave blank; let yt-dlp choose Innertube clients itself. |
-| `YTDLP_PROXY_URL` | Optional network proxy for yt-dlp. Compose sets this automatically; leave blank for local dev. |
-| `AUDIO_PROXY_URL` | Optional proxy for the audio download step. Compose sets this automatically; leave blank for local dev. |
+| `YTDLP_PROXY_URL` | Optional network proxy for yt-dlp. Compose points this at `warp` automatically unless you use `docker-compose.no-warp.yml`; leave blank for local dev on a residential connection, or set your own residential/static proxy's address. |
+| `AUDIO_PROXY_URL` | Optional proxy for the audio download step. Same rules as `YTDLP_PROXY_URL` above — keep them in sync. |
 | `YTDLP_COOKIES_FILE` | Optional path to a cookies.txt, for age-restricted videos. Default `data/cookies.txt`; unset by default, needs no account. |
 | `QUEUE_IDLE_TIMEOUT_MS` | How long an empty queue waits before the bot leaves voice. Default 5 minutes. |
 | `ALONE_TIMEOUT_MS` | In 24/7 mode, how long the bot tolerates an empty channel before giving up. Default 1 hour. |
@@ -279,8 +300,11 @@ deploys via SSM. Templates, boot script, and the full runbook live in
   extraction when YouTube changed behavior for those clients. Leave it blank.
 - **Extraction fails on a cloud host, or playback fails with "Failed to fetch audio
   stream (HTTP 403)" after resolution succeeds.** Confirm `warp` is connected:
-  `docker compose logs warp` should show `StatusChanged(Connected ...)`. If it still fails
-  after that, check the yt-dlp
+  `docker compose logs warp` should show `StatusChanged(Connected ...)`. If it's connected
+  and 403s still happen, especially in bursts after a lot of playback, that's the shared
+  free WARP IP pool's reputation degrading under load, not a config problem — see
+  "Enabling/disabling `warp`" above; a residential IP or a paid residential/static proxy
+  fixes this reliably where `warp` can't. If neither explains it, check the yt-dlp
   [PO Token Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide).
 - **Rootless Podman with a custom bridge network never reached `ready` on the voice
   connection**, separate from the DAVE issue above, when first tested on Bazzite. Running

@@ -13,7 +13,7 @@ services:
     volumes:
       # Persists the /radio artist rotation (data/radio-artists.json) across restarts and
       # redeploys, not just container restarts.
-      - ./data:/app/data
+      - ./data:/app/data:Z
     depends_on:
       - pot-provider
       - strands-agent
@@ -27,9 +27,12 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # Keeps playback reliable when this runs on a cloud host. See "How it works" in the
-  # README. warp-data persists WARP's device registration across restarts so it isn't
-  # re-registered every time.
+  # Optional, on by default: a best-effort attempt at reliable playback when this runs on a
+  # cloud host, not a guarantee. See "How it works" in the README for what it does and why
+  # it can stop helping under heavy use, and docker-compose.no-warp.yml to run without it
+  # (recommended if you're on a residential connection, or have your own residential/static
+  # proxy set via YTDLP_PROXY_URL/AUDIO_PROXY_URL already). warp-data persists WARP's device
+  # registration across restarts so it isn't re-registered every time.
   #
   # No `no-new-privileges` here, unlike the other three services: this image's entrypoint
   # uses `sudo` to run warp-svc as root, and that flag blocks sudo's setuid escalation

@@ -150,6 +150,19 @@ aws secretsmanager put-secret-value --secret-id dj-tyga --secret-string "$NEW_SE
 A cron job on the instance picks up the change within 6 hours on its own; no redeploy or
 restart needed. Cookies expire in a few days, so this repeats on that cadence.
 
+## A note on `warp`
+
+This deployment always runs the `warp` sidecar (see "How it works" in the root README for
+what it does and its limits). `docker-compose.no-warp.yml` exists for running without it,
+but this instance's boot script (`infra/userdata.sh`) doesn't wire that in — it's a
+same-EC2-instance edit, not a CloudFormation parameter, so applying it means editing the
+`docker compose` line near the end of `infra/userdata.sh` (and `main.yaml`'s embedded copy)
+to add `-f docker-compose.no-warp.yml` and list services explicitly, same as the root
+README's instructions, then redeploying via `deploy-infra.yml`. Worth doing only if you've
+set up your own residential/static proxy and configured its address into the app secret's
+env generation; otherwise `warp` is the better default here, since an EC2 instance has no
+residential IP of its own to fall back on.
+
 ## Ad-hoc debugging
 
 ```bash

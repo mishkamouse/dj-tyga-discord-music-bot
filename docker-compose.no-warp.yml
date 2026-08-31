@@ -1,0 +1,10 @@
+services:
+  bot:
+    # Talk to YouTube directly instead of through warp. Set YTDLP_PROXY_URL/AUDIO_PROXY_URL
+    # in .env first if you want to route through your own proxy instead of going direct.
+    environment:
+      YTDLP_PROXY_URL: ${YTDLP_PROXY_URL:-}
+      AUDIO_PROXY_URL: ${AUDIO_PROXY_URL:-}
+    depends_on:
+      - pot-provider
+      - strands-agent
