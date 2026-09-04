@@ -123,7 +123,10 @@ class GuildQueue {
     if (!next) {
       this.current = null;
       this.startIdleTimer();
-      this.retireNowPlayingCard();
+      // A dry queue in radio mode is a hiccup between top-ups, not the end of the session,
+      // so keep the card tracked: the next track edits it instead of posting (and pinging)
+      // a new one.
+      if (!this.radioMode) this.retireNowPlayingCard();
       radioManager.maybeTopUp(this);
       return;
     }
@@ -210,18 +213,33 @@ class GuildQueue {
     return Math.max(0, Math.floor((Date.now() - this.currentStartedAt - this.pausedMsTotal - currentPauseMs) / 1000));
   }
 
-  // Posts a fresh Now Playing card to the last known text channel and retires the
-  // previous one. Best-effort throughout: an old message might be gone, or permissions
-  // might have changed, and none of that should break playback.
+  // Puts the Now Playing card in the last known text channel: edits the tracked card in
+  // place in radio mode, otherwise posts a fresh one and retires the previous. Best-effort
+  // throughout: an old message might be gone, or permissions might have changed, and none
+  // of that should break playback.
+  //
+  // Radio queues songs indefinitely, so a new message per track means a Discord
+  // notification every few minutes. An edit produces none. The trade-off is that the card
+  // stays wherever it was posted rather than following the conversation down; /nowplaying
+  // re-posts it at the bottom and becomes the card edited from then on.
   async postNowPlaying() {
     if (!this.textChannel || !this.current) return;
+    const payload = { embeds: [nowPlayingEmbed(this)], components: [nowPlayingButtons(this)] };
+
+    const existing = this.lastNowPlayingMessage;
+    if (this.radioMode && existing) {
+      try {
+        this.lastNowPlayingMessage = await existing.edit(payload);
+        return;
+      } catch (err) {
+        // Card deleted, or no longer editable. Fall through and post a fresh one.
+        console.error(`[guild ${this.guildId}] failed to edit now-playing card:`, err.message);
+      }
+    }
+
     this.retireNowPlayingCard();
     try {
-      const message = await this.textChannel.send({
-        embeds: [nowPlayingEmbed(this)],
-        components: [nowPlayingButtons(this)],
-      });
-      this.lastNowPlayingMessage = message;
+      this.lastNowPlayingMessage = await this.textChannel.send(payload);
     } catch (err) {
       console.error(`[guild ${this.guildId}] failed to post now-playing card:`, err.message);
     }

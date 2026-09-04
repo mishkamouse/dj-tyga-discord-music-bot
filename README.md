@@ -37,6 +37,9 @@ management.
   [Commands](#commands) for why.
 - `/queue` is a paginated, button-navigable embed
 - Older cards grey out their buttons once superseded, so only one card stays live per server
+- In radio mode the card is edited in place rather than re-posted, so an endless queue
+  doesn't fire a Discord notification on every song. `/nowplaying` re-posts it at the
+  bottom of the channel if it scrolls away.
 
 **Natural language**
 - `/ask <anything>` runs a Claude agent (via [AWS Strands Agents](https://strandsagents.com))
