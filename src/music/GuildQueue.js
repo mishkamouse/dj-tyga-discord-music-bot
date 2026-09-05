@@ -52,6 +52,13 @@ class GuildQueue {
     this.radioMode = false;
     this._radioTopUpInFlight = false; // guards against overlapping top-up fetches
 
+    // No-repeat memory for the current radio session: keys (see radioManager.trackKeys)
+    // for every song radio has queued or played since it was switched on. Top-ups filter
+    // against it, so a song comes back around only after /radio off and on again.
+    this.radioHistory = new Set();
+    this.radioHistoryCount = 0; // distinct songs remembered; drives how deep radio searches
+    this._radioExhausted = false; // "played everything" notice already sent this session
+
     this.player.on(AudioPlayerStatus.Idle, () => this.onTrackEnd());
     this.player.on('error', (error) => {
       console.error(`[guild ${this.guildId}] player error:`, error.message);
@@ -88,6 +95,7 @@ class GuildQueue {
       this.clearAloneTimer();
       this.persistent = false;
       this.radioMode = false;
+      this.resetRadioHistory();
       if (this.current) {
         this.tracks.unshift(this.current);
         this.current = null;
@@ -132,6 +140,10 @@ class GuildQueue {
     }
 
     this.current = next;
+    // Radio-queued songs were remembered when they were queued; this also covers a track
+    // that got here some other way (/play, the agent) while radio is running, so radio
+    // won't turn around and queue something the room just heard.
+    if (this.radioMode) radioManager.remember(this, [next]);
 
     try {
       const streamInfo =
@@ -257,6 +269,14 @@ class GuildQueue {
     }
   }
 
+  // Wipes the no-repeat memory, so the next radio session starts from a clean slate.
+  // Called whenever radio switches off, and again by startRadio() when it switches on.
+  resetRadioHistory() {
+    this.radioHistory.clear();
+    this.radioHistoryCount = 0;
+    this._radioExhausted = false;
+  }
+
   // Stops playback and empties the queue without disconnecting. The shared core of
   // stop() below, and what /stop uses on its own in 24/7 mode, where clearing the queue
   // shouldn't count as the manual disconnect 24/7 waits for (see stop()).
@@ -265,6 +285,7 @@ class GuildQueue {
     this.tracks = [];
     this.loopMode = 'off';
     this.radioMode = false;
+    this.resetRadioHistory();
     this.current = null;
     this.nextStreamInfo = null;
     this.killActiveProcess();

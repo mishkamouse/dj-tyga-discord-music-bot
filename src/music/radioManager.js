@@ -8,6 +8,72 @@ const INITIAL_POOL_PER_ARTIST = 8; // /radio on's starting pool, per artist
 const ADD_ARTIST_BATCH = 8; // /radio add's one-time top-up, for just that one artist
 const TOPUP_THRESHOLD = 5; // queue.tracks.length below this triggers a top-up
 const TOPUP_MAX = 15; // at most this many fresh songs added per top-up
+const SEARCH_RESULT_CAP = 50; // searchYoutube's own per-query ceiling; the no-repeat ceiling too
+
+// A song's identity for no-repeat purposes: its video URL, plus its title with bracketed
+// noise stripped ("Runaway (Official Audio)" and "Runaway [HD]" collapse to one key), so a
+// re-upload under a different video id doesn't come back around later in the session. The
+// title key is scoped by rotation artist, so two artists' same-titled songs (a cover, a
+// standard) still count as different songs.
+function trackKeys(track) {
+  const keys = [];
+  if (track.url) keys.push(`u:${track.url}`);
+  const title = String(track.title || '')
+    .toLowerCase()
+    .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+  if (title) keys.push(`t:${(track.artist || '').toLowerCase()}|${title}`);
+  return keys;
+}
+
+// Records songs as heard for this radio session. Called at queue time rather than play
+// time so a song sitting in the queue can't also be picked up by the next top-up;
+// GuildQueue.playNext() calls it again for whatever actually plays.
+function remember(queue, tracks) {
+  for (const track of tracks) {
+    const keys = trackKeys(track);
+    if (keys.length === 0) continue;
+    if (!keys.some((key) => queue.radioHistory.has(key))) {
+      queue.radioHistoryCount += 1;
+      queue._radioExhausted = false; // found something new, so the rotation isn't dry anymore
+    }
+    for (const key of keys) queue.radioHistory.add(key);
+  }
+}
+
+// Drops anything already heard this session, and any duplicate within `tracks` itself:
+// one sweep can return the same song for two different artists.
+function freshOnly(queue, tracks) {
+  const seen = new Set();
+  return tracks.filter((track) => {
+    const keys = trackKeys(track);
+    if (keys.some((key) => queue.radioHistory.has(key) || seen.has(key))) return false;
+    for (const key of keys) seen.add(key);
+    return true;
+  });
+}
+
+// How many results to ask for per artist. Searching only as deep as we need would come
+// back fully played-out on the second top-up (the same query returns the same top hits),
+// so the ask grows with the session's history. YouTube's own result cap is what eventually
+// exhausts a rotation, see notifyExhausted().
+function searchDepth(queue, perArtist) {
+  return Math.min(SEARCH_RESULT_CAP, perArtist + queue.radioHistoryCount);
+}
+
+// Every result for the rotation is already played. Say so once per session instead of
+// letting radio quietly run dry, since neither fix is guessable from silence.
+function notifyExhausted(queue, artists) {
+  if (queue._radioExhausted) return;
+  queue._radioExhausted = true;
+  queue.textChannel
+    ?.send(
+      `📻 Radio has played everything I can find for **${artists.join(', ')}** without repeating. ` +
+        'Add another artist with `/radio add`, or `/radio off` then `/radio on` to start the rotation over.',
+    )
+    .catch(() => {});
+}
 
 // Batched search, one query per artist. Each result is tagged with the artist it came
 // from, which is how dropArtist() later tells a radio-sourced track apart from one a user
@@ -43,9 +109,13 @@ async function startRadio(queue, guildId, requestedBy) {
   queue.clearQueue();
   if (queue.current) queue.skip();
   queue.radioMode = true;
-  queue.enqueue(shuffleArray(pool).map((t) => ({ ...t, requestedBy })));
+  queue.resetRadioHistory(); // switching radio on is what clears the no-repeat memory
 
-  return { artists, count: pool.length };
+  const tracks = freshOnly(queue, shuffleArray(pool)).map((t) => ({ ...t, requestedBy }));
+  remember(queue, tracks);
+  queue.enqueue(tracks);
+
+  return { artists, count: tracks.length };
 }
 
 // Called after every track transition (see GuildQueue.playNext()). If the queue is
@@ -63,8 +133,15 @@ async function maybeTopUp(queue) {
   queue._radioTopUpInFlight = true;
   try {
     const perArtist = Math.max(1, Math.ceil(TOPUP_MAX / artists.length));
-    const fresh = shuffleArray(await buildPool(artists, perArtist)).slice(0, TOPUP_MAX);
-    if (fresh.length > 0) queue.enqueue(fresh.map((t) => ({ ...t, requestedBy: 'Radio' })));
+    const pool = await buildPool(artists, searchDepth(queue, perArtist));
+    const fresh = shuffleArray(freshOnly(queue, pool)).slice(0, TOPUP_MAX);
+    if (fresh.length === 0) {
+      notifyExhausted(queue, artists);
+    } else {
+      const tracks = fresh.map((t) => ({ ...t, requestedBy: 'Radio' }));
+      remember(queue, tracks);
+      queue.enqueue(tracks);
+    }
   } catch (err) {
     console.error(`[radio] top-up failed for guild ${queue.guildId}:`, err.message);
   } finally {
@@ -86,10 +163,13 @@ function dropArtist(queue, artist) {
 // controls whether it also affects what's playing now).
 async function addArtistSongs(queue, artist, requestedBy) {
   if (!queue.radioMode) return;
-  const fresh = await buildPool([artist], ADD_ARTIST_BATCH);
+  const pool = await buildPool([artist], searchDepth(queue, ADD_ARTIST_BATCH));
+  const fresh = freshOnly(queue, pool).slice(0, ADD_ARTIST_BATCH);
   if (fresh.length === 0) return;
-  queue.enqueue(fresh.map((t) => ({ ...t, requestedBy })));
+  const tracks = fresh.map((t) => ({ ...t, requestedBy }));
+  remember(queue, tracks);
+  queue.enqueue(tracks);
   queue.shuffle();
 }
 
-module.exports = { startRadio, maybeTopUp, dropArtist, addArtistSongs };
+module.exports = { startRadio, maybeTopUp, dropArtist, addArtistSongs, remember, trackKeys };
