@@ -180,20 +180,24 @@ class GuildQueue {
   ensurePrefetch() {
     const upcoming = this.tracks[0];
     if (!upcoming || this.nextStreamInfo?.track === upcoming) return;
-    this.nextStreamInfo = {
-      track: upcoming,
-      promise: getStreamInfo(upcoming)
-        .then((info) => {
-          // Backfill onto the queued track itself (not just used at playback time) so a
-          // /queue view checked after the prefetch resolves shows its real duration too.
-          if (info.duration != null) upcoming.duration = info.duration;
-          return info;
-        })
-        .catch((err) => {
-          console.error(`[guild ${this.guildId}] prefetch failed for "${upcoming.title}":`, err.message);
-          throw err;
-        }),
-    };
+    const promise = getStreamInfo(upcoming)
+      .then((info) => {
+        // Backfill onto the queued track itself (not just used at playback time) so a
+        // /queue view checked after the prefetch resolves shows its real duration too.
+        if (info.duration != null) upcoming.duration = info.duration;
+        return info;
+      })
+      .catch((err) => {
+        console.error(`[guild ${this.guildId}] prefetch failed for "${upcoming.title}":`, err.message);
+        throw err;
+      });
+    // A prefetch runs a whole track ahead of anyone awaiting it, so a rejection here has
+    // no handler attached yet and Node kills the process over it: one unplayable track
+    // (age-restricted, deleted, region-locked) took the entire bot down. This spare
+    // handler marks the rejection as handled without swallowing it — playNext() still
+    // awaits the same promise, still sees it throw, and still skips the track.
+    promise.catch(() => {});
+    this.nextStreamInfo = { track: upcoming, promise };
   }
 
   onTrackEnd() {
