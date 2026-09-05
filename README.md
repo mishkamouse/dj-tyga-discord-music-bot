@@ -56,6 +56,11 @@ management.
   the artist list, up to 15 tracks at a time, for as long as radio stays on.
   `/radio add`/`remove` each act once: add shuffles that artist's songs in immediately if
   radio is on; remove drops their not-yet-played queued songs.
+- While radio is on it acts as a backlog rather than a queue people wait behind: a song
+  someone asks for with `/play` slots in ahead of it, after any other pending requests, so
+  two people asking still play in the order they asked. Radio's top-ups append behind them,
+  leaving the queue ordered `[requests] [radio backlog]`, and `/shuffle` shuffles the two
+  halves independently so it can't drag the backlog forward. `/play next` still means next.
 - A radio session never repeats a song. Everything it queues or plays is remembered until
   radio is switched off and on again, which starts the rotation over. YouTube caps a search
   at 50 results per artist, so that's roughly how deep one session goes before it says it's
