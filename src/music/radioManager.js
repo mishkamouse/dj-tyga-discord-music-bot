@@ -67,12 +67,15 @@ function searchDepth(queue, perArtist) {
 function notifyExhausted(queue, artists) {
   if (queue._radioExhausted) return;
   queue._radioExhausted = true;
+  queue.log(`radio: played out — everything findable for ${artists.join(', ')} has already been played`);
   queue.textChannel
     ?.send(
       `📻 Radio has played everything I can find for **${artists.join(', ')}** without repeating. ` +
         'Add another artist with `/radio add`, or `/radio off` then `/radio on` to start the rotation over.',
     )
-    .catch(() => {});
+    // Swallowing this is how the notice went missing entirely on a channel the bot can't
+    // post in: radio stopped, and the only explanation was thrown away.
+    .catch((err) => console.error(`[guild ${queue.guildId}] couldn't post the radio played-out notice:`, err.message));
 }
 
 // Batched search, one query per artist. Each result is tagged with the artist it came
@@ -114,6 +117,7 @@ async function startRadio(queue, guildId, requestedBy) {
   const tracks = freshOnly(queue, shuffleArray(pool)).map((t) => ({ ...t, requestedBy }));
   remember(queue, tracks);
   queue.enqueue(tracks);
+  queue.log(`radio on: ${artists.length} artist(s), ${tracks.length} songs queued to start`);
 
   return { artists, count: tracks.length };
 }
@@ -124,23 +128,29 @@ async function startRadio(queue, guildId, requestedBy) {
 // mess, whatever; it only checks depth, so the queue stays freely editable while this
 // keeps it topped up.
 async function maybeTopUp(queue) {
-  if (!queue.radioMode || queue._radioTopUpInFlight) return;
+  if (!queue.radioMode) return;
+  // Worth a line: this is the one that quietly ends a radio session. The top-up running
+  // when the queue drains is the last one anybody asks for, so if it comes back empty
+  // nothing retries and the bot leaves once the idle timer is up.
+  if (queue._radioTopUpInFlight) return queue.log('radio: top-up already running, skipping this one');
   if (queue.tracks.length >= TOPUP_THRESHOLD) return;
 
   const artists = radioStore.getArtists(queue.guildId);
-  if (artists.length === 0) return; // nothing to draw from right now
+  if (artists.length === 0) return queue.log('radio: no artists in the rotation, nothing to top up from');
 
   queue._radioTopUpInFlight = true;
   try {
     const perArtist = Math.max(1, Math.ceil(TOPUP_MAX / artists.length));
     const pool = await buildPool(artists, searchDepth(queue, perArtist));
     const fresh = shuffleArray(freshOnly(queue, pool)).slice(0, TOPUP_MAX);
+    queue.log(`radio: searched ${artists.length} artist(s), ${pool.length} results, ${fresh.length} not played yet`);
     if (fresh.length === 0) {
       notifyExhausted(queue, artists);
     } else {
       const tracks = fresh.map((t) => ({ ...t, requestedBy: 'Radio' }));
       remember(queue, tracks);
       queue.enqueue(tracks);
+      queue.log(`radio: queued ${tracks.length} more, ${queue.tracks.length} now waiting`);
     }
   } catch (err) {
     console.error(`[radio] top-up failed for guild ${queue.guildId}:`, err.message);

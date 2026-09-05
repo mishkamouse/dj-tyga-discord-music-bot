@@ -4,6 +4,7 @@ const {
   entersState,
   AudioPlayerStatus,
   VoiceConnectionStatus,
+  VoiceConnectionDisconnectReason,
   NoSubscriberBehavior,
 } = require('@discordjs/voice');
 const { getStreamInfo } = require('./resolve');
@@ -20,6 +21,15 @@ const ALONE_TIMEOUT_MS = Number(process.env.ALONE_TIMEOUT_MS) || 60 * 60 * 1000;
 // Ten seconds is frequent enough to read as moving and nowhere near Discord's edit rate
 // limit, which is per-message and far looser than this.
 const NOW_PLAYING_REFRESH_MS = Number(process.env.NOW_PLAYING_REFRESH_MS) || 10 * 1000;
+
+// Why a bot goes quiet is the hardest thing to answer after the fact, so every state
+// change that ends playback or leaves a channel says so on its way out.
+const DISCONNECT_REASON = {
+  [VoiceConnectionDisconnectReason.WebSocketClose]: 'websocket closed by Discord',
+  [VoiceConnectionDisconnectReason.AdapterUnavailable]: 'gateway adapter unavailable',
+  [VoiceConnectionDisconnectReason.EndpointRemoved]: 'voice endpoint removed (moved, kicked, or channel deleted)',
+  [VoiceConnectionDisconnectReason.Manual]: 'disconnected manually',
+};
 
 class GuildQueue {
   constructor(guildId) {
@@ -72,29 +82,48 @@ class GuildQueue {
     });
   }
 
+  log(...parts) {
+    console.log(`[guild ${this.guildId}]`, ...parts);
+  }
+
   connect(voiceChannel) {
     this.connection = joinVoiceChannel({
       channelId: voiceChannel.id,
       guildId: this.guildId,
       adapterCreator: voiceChannel.guild.voiceAdapterCreator,
     });
+    this.log(`joining voice channel #${voiceChannel.name} (${voiceChannel.id})`);
     this.connection.on('error', (error) => {
       console.error(`[guild ${this.guildId}] connection error:`, error.message);
     });
-    this.connection.on(VoiceConnectionStatus.Disconnected, () => this.handleDisconnect());
+    // The whole reason this bot could vanish without explanation: a dropped voice
+    // connection is not an 'error', so nothing used to be written down about it.
+    this.connection.on('stateChange', (oldState, newState) => {
+      if (oldState.status !== newState.status) this.log(`voice: ${oldState.status} -> ${newState.status}`);
+    });
+    this.connection.on(VoiceConnectionStatus.Disconnected, (_old, newState) => this.handleDisconnect(newState));
     this.connection.subscribe(this.player);
   }
 
   // A manual disconnect (kicked, channel deleted) and a transient blip (e.g. a voice
   // server move) both land here first. @discordjs/voice recovers from the latter on its
   // own within a few seconds, so this only treats it as final if that doesn't happen.
-  async handleDisconnect() {
+  async handleDisconnect(state = {}) {
+    const reason = DISCONNECT_REASON[state.reason] || `unknown (${state.reason})`;
+    const closeCode = state.closeCode != null ? `, close code ${state.closeCode}` : '';
+    this.log(`voice disconnected: ${reason}${closeCode}. Waiting 5s to see if it recovers...`);
     try {
       await Promise.race([
         entersState(this.connection, VoiceConnectionStatus.Signalling, 5_000),
         entersState(this.connection, VoiceConnectionStatus.Connecting, 5_000),
       ]);
+      this.log('voice reconnected on its own; playback continues');
     } catch {
+      this.log(
+        `voice did not recover, leaving the channel. Turning off:${this.radioMode ? ' radio' : ''}` +
+          `${this.persistent ? ' 24/7' : ''}${!this.radioMode && !this.persistent ? ' nothing' : ''}` +
+          `${this.current ? `, requeueing "${this.current.title}"` : ''}`,
+      );
       this.connection?.destroy();
       this.connection = null;
       this.killActiveProcess();
@@ -137,6 +166,10 @@ class GuildQueue {
 
     if (!next) {
       this.current = null;
+      this.log(
+        `queue is empty${this.radioMode ? ', asking radio for more' : ''}` +
+          `${this.persistent ? ' (24/7 on, staying put)' : `; leaving in ${Math.round(IDLE_TIMEOUT_MS / 1000)}s if nothing arrives`}`,
+      );
       this.startIdleTimer();
       this.stopNowPlayingUpdates();
       // A dry queue in radio mode is a hiccup between top-ups, not the end of the session,
@@ -148,6 +181,7 @@ class GuildQueue {
     }
 
     this.current = next;
+    this.log(`playing "${next.title}" (${this.tracks.length} queued behind it${this.radioMode ? ', radio on' : ''})`);
     // Radio-queued songs were remembered when they were queued; this also covers a track
     // that got here some other way (/play, the agent) while radio is running, so radio
     // won't turn around and queue something the room just heard.
@@ -345,6 +379,7 @@ class GuildQueue {
   // shouldn't count as the manual disconnect 24/7 waits for (see stop()).
   // startIdleTimer() at the end is a no-op while persistent.
   clearPlayback() {
+    this.log(`clearing playback (${this.tracks.length} queued discarded${this.radioMode ? ', radio off' : ''})`);
     this.tracks = [];
     this.loopMode = 'off';
     this.radioMode = false;
@@ -362,6 +397,7 @@ class GuildQueue {
   // turns off 24/7 mode, since leaving the channel is the manual disconnect 24/7 mode
   // waits for. Used by /leave, /stop outside 24/7 mode, and the alone-timer giving up.
   stop() {
+    this.log('stopping and leaving the voice channel');
     this.clearPlayback();
     this.connection?.destroy();
     this.connection = null;
@@ -416,6 +452,7 @@ class GuildQueue {
     this.clearIdleTimer();
     if (this.persistent) return; // 24/7 mode: an empty queue alone never disconnects
     this.idleTimer = setTimeout(() => {
+      this.log(`idle for ${Math.round(IDLE_TIMEOUT_MS / 1000)}s with an empty queue, leaving the channel`);
       this.connection?.destroy();
       this.connection = null;
       resetSession(this.guildId);
@@ -447,6 +484,7 @@ class GuildQueue {
 
   startAloneTimer() {
     if (this.aloneTimer) return; // already counting down
+    this.log(`24/7: nobody else in the channel, leaving in ${Math.round(ALONE_TIMEOUT_MS / 1000)}s unless someone joins`);
     this.aloneTimer = setTimeout(() => this.stop(), ALONE_TIMEOUT_MS);
   }
 
