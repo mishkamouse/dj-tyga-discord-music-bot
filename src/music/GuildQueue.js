@@ -114,16 +114,37 @@ class GuildQueue {
   // Radio never locks the queue: a manual /play (or the agent's add_tracks) just adds a
   // track like normal, and radioManager.maybeTopUp() keeps the flow of artist songs going
   // underneath it regardless of what else ends up here.
+  //
+  // While radio is on it is a backlog rather than a queue people wait behind, so a song
+  // someone actually asked for goes ahead of it — after anything else that was requested
+  // by hand, so two people asking still play in the order they asked. Radio's own top-ups
+  // append to the back as usual, which leaves the queue ordered:
+  //   [ requested by people ] [ radio backlog ]
   enqueue(tracks, { atFront = false } = {}) {
     this.clearIdleTimer();
 
-    if (atFront) this.tracks.unshift(...tracks);
-    else this.tracks.push(...tracks);
+    const fromRadio = tracks.some((track) => track.artist);
+    if (atFront) {
+      // An explicit "play this next" still means next, ahead of other requests too.
+      this.tracks.unshift(...tracks);
+    } else if (this.radioMode && !fromRadio) {
+      this.tracks.splice(this.firstRadioIndex(), 0, ...tracks);
+    } else {
+      this.tracks.push(...tracks);
+    }
     if (!this.current) {
       this.playNext();
     } else {
       this.ensurePrefetch();
     }
+  }
+
+  // Where the radio backlog starts, and so where the next hand-picked song slots in.
+  // Radio-sourced tracks carry `.artist` (radioManager tags them when it builds a pool);
+  // nothing queued by a person does, which is the same signal /radio remove works off.
+  firstRadioIndex() {
+    const index = this.tracks.findIndex((track) => track.artist);
+    return index === -1 ? this.tracks.length : index;
   }
 
   async playNext() {
@@ -393,8 +414,18 @@ class GuildQueue {
     return true;
   }
 
+  // In radio mode the two halves shuffle independently, so a shuffle can't drag the radio
+  // backlog ahead of songs people actually asked for. Outside radio mode there's only one
+  // pile and it all shuffles together.
   shuffle() {
-    shuffleArray(this.tracks);
+    if (!this.radioMode) {
+      shuffleArray(this.tracks);
+      return;
+    }
+    const boundary = this.firstRadioIndex();
+    const requested = this.tracks.slice(0, boundary);
+    const backlog = this.tracks.slice(boundary);
+    this.tracks = [...shuffleArray(requested), ...shuffleArray(backlog)];
   }
 
   setLoop(mode) {
