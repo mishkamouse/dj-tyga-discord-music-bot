@@ -37,6 +37,10 @@ management.
   [Commands](#commands) for why.
 - `/queue` is a paginated, button-navigable embed
 - Older cards grey out their buttons once superseded, so only one card stays live per server
+- The card redraws every 10 seconds while a song plays, so the progress bar's 🔘 keeps pace
+  with the track instead of freezing where it started. It edits the card it already posted,
+  so it adds no notifications; it pauses while playback is paused, and stops on its own if
+  the card is deleted or the bot loses access to the channel.
 - In radio mode the card is edited in place rather than re-posted, so an endless queue
   doesn't fire a Discord notification on every song. `/nowplaying` re-posts it at the
   bottom of the channel if it scrolls away.
@@ -264,6 +268,7 @@ All variables live in `.env` (copy from `.env.example`).
 | `AUDIO_PROXY_URL` | Optional proxy for the audio download step. Same rules as `YTDLP_PROXY_URL` above — keep them in sync. |
 | `YTDLP_COOKIES_FILE` | Optional path to a cookies.txt, for age-restricted videos. Default `data/cookies.txt`; unset by default, needs no account. |
 | `QUEUE_IDLE_TIMEOUT_MS` | How long an empty queue waits before the bot leaves voice. Default 5 minutes. |
+| `NOW_PLAYING_REFRESH_MS` | How often the Now Playing card is redrawn so its progress bar advances. Default 10000 (10s). |
 | `ALONE_TIMEOUT_MS` | In 24/7 mode, how long the bot tolerates an empty channel before giving up. Default 1 hour. |
 | `RADIO_STORE_PATH` | Where the `/radio` artist rotation is stored. Default `data/radio-artists.json`. |
 | `STRANDS_AGENT_URL` | Base URL for the agent sidecar. Leave blank to disable `/ask` and `/radio`. |

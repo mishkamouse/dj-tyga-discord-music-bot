@@ -16,6 +16,10 @@ const radioManager = require('./radioManager');
 
 const IDLE_TIMEOUT_MS = Number(process.env.QUEUE_IDLE_TIMEOUT_MS) || 5 * 60 * 1000;
 const ALONE_TIMEOUT_MS = Number(process.env.ALONE_TIMEOUT_MS) || 60 * 60 * 1000;
+// How often the Now Playing card is redrawn so its progress bar keeps up with the song.
+// Ten seconds is frequent enough to read as moving and nowhere near Discord's edit rate
+// limit, which is per-message and far looser than this.
+const NOW_PLAYING_REFRESH_MS = Number(process.env.NOW_PLAYING_REFRESH_MS) || 10 * 1000;
 
 class GuildQueue {
   constructor(guildId) {
@@ -39,6 +43,8 @@ class GuildQueue {
     this.pausedAt = null;
     this.pausedMsTotal = 0;
     this.lastNowPlayingMessage = null;
+    this.nowPlayingTimer = null; // redraws the card on a tick; see startNowPlayingUpdates()
+    this._nowPlayingEditInFlight = false; // one edit at a time, so a slow tick can't stack up
 
     // 24/7 mode (/247): suppresses the empty-queue idle timeout below, replaced by a
     // separate, much longer timeout that only fires once the voice channel has had no
@@ -93,6 +99,7 @@ class GuildQueue {
       this.connection = null;
       this.killActiveProcess();
       this.clearAloneTimer();
+      this.stopNowPlayingUpdates();
       this.persistent = false;
       this.radioMode = false;
       this.resetRadioHistory();
@@ -131,6 +138,7 @@ class GuildQueue {
     if (!next) {
       this.current = null;
       this.startIdleTimer();
+      this.stopNowPlayingUpdates();
       // A dry queue in radio mode is a hiccup between top-ups, not the end of the session,
       // so keep the card tracked: the next track edits it instead of posting (and pinging)
       // a new one.
@@ -236,12 +244,13 @@ class GuildQueue {
   // re-posts it at the bottom and becomes the card edited from then on.
   async postNowPlaying() {
     if (!this.textChannel || !this.current) return;
-    const payload = { embeds: [nowPlayingEmbed(this)], components: [nowPlayingButtons(this)] };
+    const payload = this.nowPlayingPayload();
 
     const existing = this.lastNowPlayingMessage;
     if (this.radioMode && existing) {
       try {
         this.lastNowPlayingMessage = await existing.edit(payload);
+        this.startNowPlayingUpdates();
         return;
       } catch (err) {
         // Card deleted, or no longer editable. Fall through and post a fresh one.
@@ -252,8 +261,57 @@ class GuildQueue {
     this.retireNowPlayingCard();
     try {
       this.lastNowPlayingMessage = await this.textChannel.send(payload);
+      this.startNowPlayingUpdates();
     } catch (err) {
       console.error(`[guild ${this.guildId}] failed to post now-playing card:`, err.message);
+    }
+  }
+
+  nowPlayingPayload() {
+    return { embeds: [nowPlayingEmbed(this)], components: [nowPlayingButtons(this)] };
+  }
+
+  // Redraws the tracked card every NOW_PLAYING_REFRESH_MS so the progress bar's 🔘 walks
+  // along with the song instead of freezing where the track started. Always edits the
+  // message it is already tracking, so this adds no notifications of its own, in radio
+  // mode or out of it.
+  startNowPlayingUpdates() {
+    this.stopNowPlayingUpdates();
+    this.nowPlayingTimer = setInterval(() => this.refreshNowPlayingCard(), NOW_PLAYING_REFRESH_MS);
+    // Node keeps the process alive for a pending interval; this one is pure UI and should
+    // never be the reason the bot doesn't exit.
+    this.nowPlayingTimer.unref?.();
+  }
+
+  stopNowPlayingUpdates() {
+    if (this.nowPlayingTimer) clearInterval(this.nowPlayingTimer);
+    this.nowPlayingTimer = null;
+  }
+
+  // Starts the redraw tick if a track is playing and a card is being tracked but nothing
+  // is ticking yet. Lets /nowplaying and the card buttons pick the clock back up after a
+  // failed post stopped it.
+  ensureNowPlayingUpdates() {
+    if (!this.nowPlayingTimer && this.current && this.lastNowPlayingMessage) this.startNowPlayingUpdates();
+  }
+
+  async refreshNowPlayingCard() {
+    const message = this.lastNowPlayingMessage;
+    if (!message || !this.current) return this.stopNowPlayingUpdates();
+    // Paused: elapsed isn't moving, so the redraw would be byte-identical. Skip the call
+    // rather than spend a request on it; the pause button already redrew the card itself.
+    if (this.isPaused() || this._nowPlayingEditInFlight) return;
+
+    this._nowPlayingEditInFlight = true;
+    try {
+      this.lastNowPlayingMessage = await message.edit(this.nowPlayingPayload());
+    } catch (err) {
+      // Deleted, or the bot lost access to the channel. Either way it won't fix itself, so
+      // stop ticking instead of logging the same failure every ten seconds forever.
+      console.error(`[guild ${this.guildId}] now-playing refresh stopped:`, err.message);
+      this.stopNowPlayingUpdates();
+    } finally {
+      this._nowPlayingEditInFlight = false;
     }
   }
 
@@ -267,6 +325,7 @@ class GuildQueue {
     if (previous && previous.id !== next?.id) {
       previous.edit({ components: [disabledRow(previous.components[0])] }).catch(() => {});
     }
+    this.ensureNowPlayingUpdates();
   }
 
   // Wipes the no-repeat memory, so the next radio session starts from a clean slate.
@@ -290,6 +349,7 @@ class GuildQueue {
     this.nextStreamInfo = null;
     this.killActiveProcess();
     this.player.stop(true);
+    this.stopNowPlayingUpdates();
     this.retireNowPlayingCard();
     this.startIdleTimer();
   }
