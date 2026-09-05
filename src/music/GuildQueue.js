@@ -52,6 +52,13 @@ class GuildQueue {
     this.radioMode = false;
     this._radioTopUpInFlight = false; // guards against overlapping top-up fetches
 
+    // No-repeat memory for the current radio session: keys (see radioManager.trackKeys)
+    // for every song radio has queued or played since it was switched on. Top-ups filter
+    // against it, so a song comes back around only after /radio off and on again.
+    this.radioHistory = new Set();
+    this.radioHistoryCount = 0; // distinct songs remembered; drives how deep radio searches
+    this._radioExhausted = false; // "played everything" notice already sent this session
+
     this.player.on(AudioPlayerStatus.Idle, () => this.onTrackEnd());
     this.player.on('error', (error) => {
       console.error(`[guild ${this.guildId}] player error:`, error.message);
@@ -88,6 +95,7 @@ class GuildQueue {
       this.clearAloneTimer();
       this.persistent = false;
       this.radioMode = false;
+      this.resetRadioHistory();
       if (this.current) {
         this.tracks.unshift(this.current);
         this.current = null;
@@ -123,12 +131,19 @@ class GuildQueue {
     if (!next) {
       this.current = null;
       this.startIdleTimer();
-      this.retireNowPlayingCard();
+      // A dry queue in radio mode is a hiccup between top-ups, not the end of the session,
+      // so keep the card tracked: the next track edits it instead of posting (and pinging)
+      // a new one.
+      if (!this.radioMode) this.retireNowPlayingCard();
       radioManager.maybeTopUp(this);
       return;
     }
 
     this.current = next;
+    // Radio-queued songs were remembered when they were queued; this also covers a track
+    // that got here some other way (/play, the agent) while radio is running, so radio
+    // won't turn around and queue something the room just heard.
+    if (this.radioMode) radioManager.remember(this, [next]);
 
     try {
       const streamInfo =
@@ -210,18 +225,33 @@ class GuildQueue {
     return Math.max(0, Math.floor((Date.now() - this.currentStartedAt - this.pausedMsTotal - currentPauseMs) / 1000));
   }
 
-  // Posts a fresh Now Playing card to the last known text channel and retires the
-  // previous one. Best-effort throughout: an old message might be gone, or permissions
-  // might have changed, and none of that should break playback.
+  // Puts the Now Playing card in the last known text channel: edits the tracked card in
+  // place in radio mode, otherwise posts a fresh one and retires the previous. Best-effort
+  // throughout: an old message might be gone, or permissions might have changed, and none
+  // of that should break playback.
+  //
+  // Radio queues songs indefinitely, so a new message per track means a Discord
+  // notification every few minutes. An edit produces none. The trade-off is that the card
+  // stays wherever it was posted rather than following the conversation down; /nowplaying
+  // re-posts it at the bottom and becomes the card edited from then on.
   async postNowPlaying() {
     if (!this.textChannel || !this.current) return;
+    const payload = { embeds: [nowPlayingEmbed(this)], components: [nowPlayingButtons(this)] };
+
+    const existing = this.lastNowPlayingMessage;
+    if (this.radioMode && existing) {
+      try {
+        this.lastNowPlayingMessage = await existing.edit(payload);
+        return;
+      } catch (err) {
+        // Card deleted, or no longer editable. Fall through and post a fresh one.
+        console.error(`[guild ${this.guildId}] failed to edit now-playing card:`, err.message);
+      }
+    }
+
     this.retireNowPlayingCard();
     try {
-      const message = await this.textChannel.send({
-        embeds: [nowPlayingEmbed(this)],
-        components: [nowPlayingButtons(this)],
-      });
-      this.lastNowPlayingMessage = message;
+      this.lastNowPlayingMessage = await this.textChannel.send(payload);
     } catch (err) {
       console.error(`[guild ${this.guildId}] failed to post now-playing card:`, err.message);
     }
@@ -239,6 +269,14 @@ class GuildQueue {
     }
   }
 
+  // Wipes the no-repeat memory, so the next radio session starts from a clean slate.
+  // Called whenever radio switches off, and again by startRadio() when it switches on.
+  resetRadioHistory() {
+    this.radioHistory.clear();
+    this.radioHistoryCount = 0;
+    this._radioExhausted = false;
+  }
+
   // Stops playback and empties the queue without disconnecting. The shared core of
   // stop() below, and what /stop uses on its own in 24/7 mode, where clearing the queue
   // shouldn't count as the manual disconnect 24/7 waits for (see stop()).
@@ -247,6 +285,7 @@ class GuildQueue {
     this.tracks = [];
     this.loopMode = 'off';
     this.radioMode = false;
+    this.resetRadioHistory();
     this.current = null;
     this.nextStreamInfo = null;
     this.killActiveProcess();

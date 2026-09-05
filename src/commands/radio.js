@@ -85,6 +85,7 @@ async function handleOff(interaction) {
     return interaction.reply({ content: 'Radio isn\'t on.', ephemeral: true });
   }
   queue.radioMode = false;
+  queue.resetRadioHistory(); // next /radio on starts the no-repeat memory over
   await interaction.reply("Radio mode off. I'll finish what's queued and then stop.");
 }
 
